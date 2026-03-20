@@ -1,8 +1,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "bluethoot_device.h"
-#include "zv_bluethoot.h"
+#include "zv_bluetooth_device.h"
+#include "zv_bluetooth.h"
 
 #include <string.h>
 #include <stdbool.h>
@@ -15,9 +15,9 @@
 #include "esp_gap_ble_api.h"
 
 
-#define SCAN_DURATION_SEC 15
+#define SCAN_DURATION_IN_SEC 15
 
-static const char *ZEROVOLTS_MAIN_TAG = "ZEROVOLTS_FIRMWARE";
+static const char *TAG = "ZEROVOLTS_FIRMWARE";
 
 static void format_mac_address(const uint8_t* mac_addr, char* output_str) 
 {
@@ -31,8 +31,8 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
     switch(event)
     {
         case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
-            ESP_LOGI(ZEROVOLTS_MAIN_TAG, "gap_event_handler::set params ready");
-            esp_ble_gap_start_scanning(SCAN_DURATION_SEC);
+            ESP_LOGI(TAG, "gap_event_handler::set params ready");
+            esp_ble_gap_start_scanning(SCAN_DURATION_IN_SEC);
             break;
         case ESP_GAP_BLE_SCAN_RESULT_EVT:
 
@@ -42,35 +42,32 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                     case ESP_GAP_SEARCH_INQ_RES_EVT:
                         
                         char name_buf[128];
-                        get_device_name(scan_result, name_buf, 128);
+                        zv_bt_get_device_name(scan_result, name_buf, 128);
                        
                         char mac_str[18];
                         format_mac_address(scan_result.bda, mac_str);
 
                         char manufacturer_name[128];
-                        get_manufacturer_name(scan_result, manufacturer_name, 128);
+                        zv_bt_get_manufacturer_name(scan_result, manufacturer_name, 128);
 
-                        add_device(name_buf, mac_str, scan_result.rssi, manufacturer_name);
+                        zv_bt_add_device(name_buf, mac_str, scan_result.rssi, manufacturer_name);
 
                         break;
                     case ESP_GAP_SEARCH_INQ_CMPL_EVT:
-                        ESP_LOGI(ZEROVOLTS_MAIN_TAG, "The data retrieve is complete");
-                        print_devices();
+                        ESP_LOGI(TAG, "The data retrieve is complete");
+                        zv_bt_print_devices();
                         break;
                     default:
-                        ESP_LOGI(ZEROVOLTS_MAIN_TAG, "not reading search_evet: %d", scan_result.search_evt);
+                        ESP_LOGI(TAG, "not reading search_evet: %d", scan_result.search_evt);
                         break;
                 }
                 
-            break;
-            case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
-                ESP_LOGI(ZEROVOLTS_MAIN_TAG, "gap_event_handler::ESP_GAP_BLE_SCAN_START_COMPLETE_EVT");
                 break;
             case ESP_GAP_SEARCH_INQ_CMPL_EVT:
-                ESP_LOGI(ZEROVOLTS_MAIN_TAG, "════ Escaneo completado ════");
+                ESP_LOGI(TAG, "════ Escaneo completado ════");
                 break;
         default:
-            ESP_LOGI(ZEROVOLTS_MAIN_TAG, "gap_event_handler::Event not recognized");
+            ESP_LOGI(TAG, "gap_event_handler::Event not recognized");
             break;
     }
 }
@@ -86,21 +83,20 @@ void app_main(void)
 
     ESP_ERROR_CHECK(ret);
 
-    esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 
-    // Initializing Bluethoot controller
-    esp_bt_controller_config_t bluethoot_config = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    esp_bt_controller_init(&bluethoot_config);
-    esp_bt_controller_enable(ESP_BT_MODE_BLE);
+    // Initializing Bluetooth controller
+    esp_bt_controller_config_t bt_config = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_bt_controller_init(&bt_config));
+    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
 
     // Initializing Bluedroid host
-    //TODO: validar los resultados :S
-    esp_bluedroid_init();
-    esp_bluedroid_enable();
 
-    esp_ble_gap_register_callback(gap_event_handler);
+    ESP_ERROR_CHECK(esp_bluedroid_init());
+    ESP_ERROR_CHECK(esp_bluedroid_enable());
 
-    // https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/ble/get-started/ble-device-discovery.html
+    ESP_ERROR_CHECK(esp_ble_gap_register_callback(gap_event_handler));
+
     esp_ble_scan_params_t scan_params = {
         .scan_type = BLE_SCAN_TYPE_ACTIVE,              // Asking for more information 
         .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
@@ -111,4 +107,6 @@ void app_main(void)
     };
 
     esp_ble_gap_set_scan_params(&scan_params);
+
+     ESP_LOGI(TAG, "=== ZeroVolts Firmware initialized ===");
 }

@@ -1,16 +1,16 @@
-#include "bluethoot_device.h"
+#include "zv_bluetooth_device.h"
 #include <stdio.h>
 #include "esp_log.h"
 
 #define MAX_DEVICES 35
 #define DEFAULT_NAME "Unknown"
 
-static const char *TAG = "BLUETHOOT_DEVICE";
+static const char *TAG = "ZV_BLUETOOTH_DEVICE";
 
-static bl_device_t devices[MAX_DEVICES];
+static zv_bt_device_t devices[MAX_DEVICES];
 static int device_count = 0;
 
-static bl_device_t *find_device(const char *mac)
+static zv_bt_device_t *find_device(const char *mac)
 {
     for (int index = 0; index < device_count; index++)
     {
@@ -21,13 +21,13 @@ static bl_device_t *find_device(const char *mac)
     return NULL;
 }
 
-void add_device(const char *name, const char *mac, int rssi, const char *manufacturer)
+void zv_bt_add_device(const char *name, const char *mac, int rssi, const char *manufacturer)
 {
     if (!mac || !mac[0])
         return;
 
-    bl_device_t *device = find_device(mac);
-    if (device) 
+    zv_bt_device_t *device = find_device(mac);
+    if (device)
     {
         device->rssi = rssi;
         if (name && strcmp(device->name, DEFAULT_NAME) == 0)
@@ -39,7 +39,7 @@ void add_device(const char *name, const char *mac, int rssi, const char *manufac
         return;
     }
 
-    if (device_count >= MAX_DEVICES) 
+    if (device_count >= MAX_DEVICES)
     {
         ESP_LOGI(TAG, "Can't save more devices, is in the limit of %d", MAX_DEVICES);
         return;
@@ -53,13 +53,13 @@ void add_device(const char *name, const char *mac, int rssi, const char *manufac
     snprintf(device->manufacturer, sizeof(device->manufacturer), "%s",  manufacturer ? manufacturer : DEFAULT_NAME);
 }
 
-void print_devices()
+void zv_bt_print_devices()
 {
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "-------------------------------");
     for (int idx = 0; idx < device_count; idx++)
     {
-        ESP_LOGI(TAG, "[%d] name: %s, mac: %s, Manufacturer: %s, rssi: %d", 
+        ESP_LOGI(TAG, "[%d] name: %s, mac: %s, Manufacturer: %s, rssi: %d",
                 idx, devices[idx].name, devices[idx].mac, devices[idx].manufacturer, devices[idx].rssi);
     }
     ESP_LOGI(TAG, "-------------------------------");
