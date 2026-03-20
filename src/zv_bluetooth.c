@@ -34,8 +34,7 @@ void zv_bt_get_manufacturer_name(struct ble_scan_result_evt_param scan_result, c
 
     if (!adv_manufactured || adv_name_length < 2)
     {
-        sprintf(out_name, "%s", "Unkwnown");
-        ESP_LOGI(TAG, "No manufacturer name found");
+        sprintf(out_name, "%s", "Unknown");
         return;
     }
 
@@ -80,5 +79,7 @@ void zv_bt_get_device_name(struct ble_scan_result_evt_param scan_result, char *o
         return;
     }
 
-    snprintf(out_name, out_length, "%s", adv_name);
+    int copy_len = (name_length < out_length - 1) ? name_length : out_length - 1;
+    memcpy(out_name, adv_name, copy_len);
+    out_name[copy_len] = '\0';
 }
