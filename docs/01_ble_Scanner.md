@@ -1,9 +1,5 @@
 # BLE Scanner con Bluedroid
 
-> **Prerequisito:** Haber visto/leido el documento Fundamentos.
-> Aqui se explica como el ESP32 **escanea** dispositivos BLE cercanos, guarda los únicos (sin duplicados) y muestra una tabla resumen.
-
----
 
 ## 1. Objetivos
 
@@ -104,29 +100,7 @@ Solo usamos la capa **GAP** — todavía no hay conexión ni GATT.
 
 ---
 
-## 5. Diagrama: Timing del escaneo
-
-```
-    scan_interval = 0x50 (50 ms)
-    |◄─────────────────────────────────────────►|
-    |                                            |
-    |  scan_window = 0x30 (30 ms)                |
-    |◄────────────────────────►|                 |
-    |                          |                 |
-    ████████████████████████████░░░░░░░░░░░░░░░░████████████████...
-    ^─── escuchando ──────────^  ^── idle ──^   ^── escuchando
-
-    Si scan_window == scan_interval → escucha el 100% del tiempo
-    Si scan_window <  scan_interval → escucha por ráfagas (ahorra energía)
-
-    Unidad BLE: cada unidad = 0.625 ms
-    0x50 = 80 unidades × 0.625 = 50 ms
-    0x30 = 48 unidades × 0.625 = 30 ms
-```
-
----
-
-## 6. Paso 1: Crear el proyecto
+## 5. Paso 1: Crear el proyecto
 
 ### platformio.ini
 
@@ -165,7 +139,7 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
 ---
 
-## 7. Paso 2: Entender la inicialización
+## 6. Paso 2: Entender la inicialización
 
 Cada llamada de init tiene un propósito específico:
 
@@ -194,7 +168,7 @@ esp_ble_gap_set_scan_params(&ble_scan_params);
 
 ---
 
-## 8. Paso 3: Parámetros de escaneo
+## 7. Paso 3: Parámetros de escaneo
 
 ```c
 static esp_ble_scan_params_t ble_scan_params = {
@@ -218,7 +192,7 @@ static esp_ble_scan_params_t ble_scan_params = {
 
 ---
 
-## 9. Paso 4: El callback GAP
+## 8. Paso 4: El callback GAP
 
 El callback recibe **todos** los eventos GAP. Para un scanner nos interesan dos:
 
@@ -252,7 +226,7 @@ if (adv_name == NULL) {
 
 ---
 
-## 10. Paso 5: Almacenar dispositivos sin duplicados
+## 9. Paso 5: Almacenar dispositivos sin duplicados
 
 Comparamos por **MAC address** porque:
 - El nombre puede repetirse (varios "ESP32")
@@ -273,7 +247,7 @@ static bool device_exists(const char *mac) {
 
 ---
 
-## 11. Diagrama: Estructura del paquete advertising
+## 10. Diagrama: Estructura del paquete advertising
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -309,7 +283,7 @@ static bool device_exists(const char *mac) {
 
 ---
 
-## 12. Código completo: main.c
+## 11. Código completo: main.c
 
 ```c
 #include <stdio.h>
@@ -528,7 +502,7 @@ void app_main(void)
 
 ---
 
-## 13. Qué se va a ver en el monitor serie
+## 12. Qué se va a ver en el monitor serie
 
 ```
 I (325) BLE_SCANNER: === BLE Scanner ESP32 ===
@@ -558,21 +532,19 @@ I (30350) BLE_SCANNER: ╚════╩═════════════
 
 ---
 
-## 14. Errores comunes
+## 13. Errores comunes
 
 | Error | Causa | Solución |
 |-------|-------|----------|
 | `esp_bt.h: No such file` | Bluetooth no habilitado en sdkconfig | Borrar `sdkconfig.esp32dev`, hacer `pio run -t clean` |
 | No encuentra dispositivos | `scan_window` o `scan_interval` muy bajos | Usar valores por defecto (0x50/0x30) |
-| Lista llena de repetidos | No comparas por MAC antes de agregar | Usar `device_exists()` |
 | Todos aparecen como "(desconocido)" | Scan pasivo o dispositivos no publican nombre | Usar `BLE_SCAN_TYPE_ACTIVE` |
-| Crash al copiar nombre | No verificas `adv_name_len` antes de `memcpy` | Siempre verificar `!= NULL && > 0` |
 | No compila con `framework = arduino` | Este tutorial es para ESP-IDF | Usar `framework = espidf` en platformio.ini |
 
 ---
 
 
-## 15. Referencias
+## 14. Referencias
 
 - ESP-IDF GAP BLE API: https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/bluetooth/esp_gap_ble.html
 - BLE device discovery guide: https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/ble/get-started/ble-device-discovery.html

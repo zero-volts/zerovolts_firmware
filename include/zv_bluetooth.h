@@ -14,5 +14,7 @@ extern const zv_bt_signature_t zv_bt_signatures[];
 const char *zv_bt_get_device_type(esp_bt_dev_type_t device_type);
 void zv_bt_get_manufacturer_name(struct ble_scan_result_evt_param scan_result, char *out_name, int out_length);
 void zv_bt_get_device_name(struct ble_scan_result_evt_param scan_result, char *out_name, int out_length);
+void zv_get_device_appearance(struct ble_scan_result_evt_param scan_result, char *out_name, int out_length);
+void zv_get_device_service(struct ble_scan_result_evt_param scan_result, char *out_name, int out_length);
 
 #endif /* ZV_BLUETOOTH_H */

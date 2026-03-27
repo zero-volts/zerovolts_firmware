@@ -21,7 +21,7 @@ static zv_bt_device_t *find_device(const char *mac)
     return NULL;
 }
 
-void zv_bt_add_device(const char *name, const char *mac, int rssi, const char *manufacturer)
+void zv_bt_add_device(const char *name, const char *mac, int rssi, const char *manufacturer, const char *service, const char *appearance)
 {
     if (!mac || !mac[0])
         return;
@@ -51,6 +51,8 @@ void zv_bt_add_device(const char *name, const char *mac, int rssi, const char *m
     snprintf(device->name, sizeof(device->name), "%s", name ? name : DEFAULT_NAME);
     snprintf(device->mac, sizeof(device->mac), "%s", mac);
     snprintf(device->manufacturer, sizeof(device->manufacturer), "%s",  manufacturer ? manufacturer : DEFAULT_NAME);
+    snprintf(device->service, sizeof(device->service), "%s",  service ? service : DEFAULT_NAME);
+    snprintf(device->appearance, sizeof(device->appearance), "%s",  appearance ? appearance : DEFAULT_NAME);
 }
 
 void zv_bt_print_devices()
@@ -59,8 +61,8 @@ void zv_bt_print_devices()
     ESP_LOGI(TAG, "-------------------------------");
     for (int idx = 0; idx < device_count; idx++)
     {
-        ESP_LOGI(TAG, "[%d] name: %s, mac: %s, Manufacturer: %s, rssi: %d",
-                idx, devices[idx].name, devices[idx].mac, devices[idx].manufacturer, devices[idx].rssi);
+        ESP_LOGI(TAG, "[%d] name: %s, mac: %s, Manufacturer: %s, service: %s, appearance: %s, rssi: %d",
+                idx, devices[idx].name, devices[idx].mac, devices[idx].manufacturer, devices[idx].service, devices[idx].appearance, devices[idx].rssi);
     }
     ESP_LOGI(TAG, "-------------------------------");
 }

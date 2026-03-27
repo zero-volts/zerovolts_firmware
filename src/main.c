@@ -3,6 +3,7 @@
 
 #include "zv_bluetooth_device.h"
 #include "zv_bluetooth.h"
+#include "zv_format_utils.h"
 
 #include <string.h>
 #include <stdbool.h>
@@ -14,17 +15,12 @@
 #include "esp_bt_main.h"
 #include "esp_gap_ble_api.h"
 
+#include "esp_gattc_api.h"
+
 
 #define SCAN_DURATION_IN_SEC 15
 
 static const char *TAG = "ZEROVOLTS_FIRMWARE";
-
-static void format_mac_address(const uint8_t* mac_addr, char* output_str) 
-{
-    sprintf(output_str, "%02X:%02X:%02X:%02X:%02X:%02X",
-            mac_addr[0], mac_addr[1], mac_addr[2],
-            mac_addr[3], mac_addr[4], mac_addr[5]);
-}
 
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {    
@@ -41,16 +37,22 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                 {
                     case ESP_GAP_SEARCH_INQ_RES_EVT:
                         
-                        char name_buf[128];
-                        zv_bt_get_device_name(scan_result, name_buf, 128);
+                        char name_buf[MAX_STRING_SIZE];
+                        zv_bt_get_device_name(scan_result, name_buf, MAX_STRING_SIZE);
                        
                         char mac_str[18];
-                        format_mac_address(scan_result.bda, mac_str);
+                        zv_format_mac_address(scan_result.bda, mac_str);
 
-                        char manufacturer_name[128];
-                        zv_bt_get_manufacturer_name(scan_result, manufacturer_name, 128);
+                        char manufacturer_name[MAX_STRING_SIZE];
+                        zv_bt_get_manufacturer_name(scan_result, manufacturer_name, MAX_STRING_SIZE);
 
-                        zv_bt_add_device(name_buf, mac_str, scan_result.rssi, manufacturer_name);
+                        char service[MAX_STRING_SIZE];
+                        zv_get_device_service(scan_result, service, MAX_STRING_SIZE);
+
+                        char appereance[MAX_STRING_SIZE];
+                        zv_get_device_appearance(scan_result, appereance, MAX_STRING_SIZE);
+
+                        zv_bt_add_device(name_buf, mac_str, scan_result.rssi, manufacturer_name, service, appereance);
 
                         break;
                     case ESP_GAP_SEARCH_INQ_CMPL_EVT:
@@ -103,10 +105,12 @@ void app_main(void)
         .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,
         .scan_window = 30,
         .scan_interval = 50,
-        .scan_duplicate = BLE_SCAN_DUPLICATE_DISABLE    
+        .scan_duplicate = BLE_SCAN_DUPLICATE_DISABLE
     };
 
     esp_ble_gap_set_scan_params(&scan_params);
 
-     ESP_LOGI(TAG, "=== ZeroVolts Firmware initialized ===");
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "==== ZeroVolts Firmware initialized ====");
+    ESP_LOGI(TAG, "========================================");
 }
