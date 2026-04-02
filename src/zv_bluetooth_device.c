@@ -109,12 +109,12 @@ void zv_bt_add_device(zv_bt_device_t new_device)
     device->connectable = new_device.connectable;
     device->addr_type = new_device.addr_type;
     memcpy(device->mac_address, new_device.mac_address, sizeof(device->mac_address));
-    
+
     snprintf(device->name, sizeof(device->name), "%s", new_device.name[0] ? new_device.name : DEFAULT_NAME);
     snprintf(device->mac, sizeof(device->mac), "%s", new_device.mac);
     snprintf(device->manufacturer, sizeof(device->manufacturer), "%s",  new_device.manufacturer[0] ? new_device.manufacturer : DEFAULT_NAME);
     snprintf(device->service, sizeof(device->service), "%s",  new_device.service[0] ? new_device.service : DEFAULT_NAME);
-    snprintf(device->appearance, sizeof(device->appearance), "%s",  new_device.appearance[0] ? new_device.appearance : DEFAULT_NAME);   
+    snprintf(device->appearance, sizeof(device->appearance), "%s",  new_device.appearance[0] ? new_device.appearance : DEFAULT_NAME);
 }
 
 void zv_bt_print_devices()
