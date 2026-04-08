@@ -4,15 +4,17 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define MAX_SERVICES            20
+#define MAX_SERVICES 20
 static const char *TAG = "ZV_BT_GATTC";
 
 static zv_bt_service_t discovered_services[MAX_SERVICES];
 static int services_count = 0;
 
+// internal context to manager gatcc id and connection id between calls
 static zv_bt_gatt_ctx_t gattc_context = {
     .gattc_if = ESP_GATT_IF_NONE,
-    .connection_id = -1
+    .connection_id = 0,
+    .connected = false
 };
 
 static zv_bt_service_t *zv_gatt_find_service(const esp_bt_uuid_t uuid)
@@ -50,22 +52,6 @@ void zv_bt_gatt_add_service(zv_bt_service_t new_service)
 
     char uuid_str[37];
     zv_format_uuid(new_service.uuid.uuid.uuid128, new_service.uuid.len, uuid_str, sizeof(uuid_str));
-    ESP_LOGI(TAG, "service stored UUID: %s", uuid_str);
-}
-
-int zv_bt_services_amount()
-{
-    return services_count;
-}
-
-zv_bt_service_t *zv_bt_gattc_get_services()
-{
-    return discovered_services;
-}
-
-void zv_bt_gattc_reset_services()
-{
-    services_count = 0;
 }
 
 zv_bt_gatt_ctx_t *zv_bt_gattc_get_context()
@@ -92,6 +78,7 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
         case ESP_GATTC_CONNECT_EVT:
 
             gattc_context.connection_id = param->connect.conn_id;
+            gattc_context.connected = true;
             ESP_LOGI(TAG, "ESP_GATTC_CONNECT_EVT connection ID: %d", param->connect.conn_id);
             break;
 
@@ -127,27 +114,31 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
         case ESP_GATTC_SEARCH_CMPL_EVT:
         {
             ESP_LOGI(TAG, "ESP_GATTC_SEARCH_CMPL_EVT");
+            ESP_LOGI(TAG, "services found: %d", services_count);
 
-            int svc_count = zv_bt_services_amount();
-            ESP_LOGI(TAG, "services found: %d", svc_count);
-
-            if (svc_count <= 0)
+            if (services_count <= 0)
                 break;
 
             int total_readable = 0;
             int total_writable = 0;
             int total_notify = 0;
 
-            zv_bt_service_t *services = zv_bt_gattc_get_services();
-            for (int index = 0; index < svc_count; index++)
+            ESP_LOGI(TAG, "");
+            ESP_LOGI(TAG, "======================================================");
+            ESP_LOGI(TAG, "           GATT Device database                       ");
+            ESP_LOGI(TAG, "======================================================");
+
+            zv_bt_service_t *services = discovered_services;
+            for (int index = 0; index < services_count; index++)
             {
                 zv_bt_service_t service = services[index];
 
                 char svc_uuid_str[37];
                 zv_format_uuid(service.uuid.uuid.uuid128, service.uuid.len, svc_uuid_str, sizeof(svc_uuid_str));
                 ESP_LOGI(TAG, "");
-                ESP_LOGI(TAG, "--- Service %d (handles %d-%d) UUID: %s ---",
-                         index + 1, service.start_handle, service.end_handle, svc_uuid_str);
+                ESP_LOGI(TAG, "+--- Service %d (handles %d-%d) ---",
+                         index + 1, service.start_handle, service.end_handle);
+                ESP_LOGI(TAG, "|    UUID: %s", svc_uuid_str);
 
                 uint16_t count = 0;
                 esp_ble_gattc_get_attr_count(gattc_if, gattc_context.connection_id,
@@ -159,14 +150,14 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
 
                 if (count == 0)
                 {
-                    ESP_LOGI(TAG, "  (no characteristics)");
+                    ESP_LOGI(TAG, "|   (sin caracteristicas)");
                     continue;
                 }
 
                 esp_gattc_char_elem_t *characteristic = malloc(sizeof(esp_gattc_char_elem_t) * count);
                 if (characteristic == NULL)
                 {
-                    ESP_LOGE(TAG, "  malloc failed for %d characteristics", count);
+                    ESP_LOGE(TAG, "|   malloc failed for %d characteristics", count);
                     continue;
                 }
 
@@ -181,48 +172,57 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
 
                 if (result != ESP_OK)
                 {
-                    ESP_LOGE(TAG, "  get_all_char failed: %d", result);
+                    ESP_LOGE(TAG, "|   get_all_char failed: %d", result);
                     free(characteristic);
                     continue;
                 }
 
-                ESP_LOGI(TAG, "  characteristics: %d", count);
+                ESP_LOGI(TAG, "|   Caracteristicas: %d", count);
                 for (int idx = 0; idx < count; idx++)
                 {
                     char uuid_str[37];
                     zv_format_uuid(characteristic[idx].uuid.uuid.uuid128, characteristic[idx].uuid.len, uuid_str, sizeof(uuid_str));
 
                     uint8_t props = characteristic[idx].properties;
-                    ESP_LOGI(TAG, "  char[%d] handle: %d, UUID: %s", idx, characteristic[idx].char_handle, uuid_str);
-                    ESP_LOGI(TAG, "    properties: %s%s%s%s%s",
+                    ESP_LOGI(TAG, "|");
+                    ESP_LOGI(TAG, "|   +-- Characteristic %d (handle: %d)", idx + 1, characteristic[idx].char_handle);
+                    ESP_LOGI(TAG, "|   |   UUID: %s", uuid_str);
+                    ESP_LOGI(TAG, "|   |   Properties: %s%s%s%s%s",
                              (props & ESP_GATT_CHAR_PROP_BIT_READ)     ? "READ "     : "",
                              (props & ESP_GATT_CHAR_PROP_BIT_WRITE)    ? "WRITE "    : "",
                              (props & ESP_GATT_CHAR_PROP_BIT_WRITE_NR) ? "WRITE_NR " : "",
                              (props & ESP_GATT_CHAR_PROP_BIT_NOTIFY)   ? "NOTIFY "   : "",
                              (props & ESP_GATT_CHAR_PROP_BIT_INDICATE) ? "INDICATE " : "");
 
-                    if (props & ESP_GATT_CHAR_PROP_BIT_READ) total_readable++;
-                    if (props & (ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_WRITE_NR)) total_writable++;
-                    if (props & (ESP_GATT_CHAR_PROP_BIT_NOTIFY | ESP_GATT_CHAR_PROP_BIT_INDICATE)) total_notify++;
+                    bool can_read = props & ESP_GATT_CHAR_PROP_BIT_READ;
+                    bool can_write = props & (ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_WRITE_NR);
+                    bool can_notify = props & (ESP_GATT_CHAR_PROP_BIT_NOTIFY | ESP_GATT_CHAR_PROP_BIT_INDICATE);
+
+                    const char *access_level;
+                    if (can_read && can_write)       access_level = "READ + WRITE";
+                    else if (can_read && can_notify)  access_level = "READ + SUBSCRIPTION";
+                    else if (can_read)                access_level = "ONLY READ";
+                    else if (can_write)               access_level = "ONLY WRITE";
+                    else if (can_notify)              access_level = "ONLY NOTIFY/INDICATE";
+                    else                              access_level = "WITHOUT ACCESS";
+
+                    ESP_LOGI(TAG, "|   |   Access: %s", access_level);
+
+                    if (can_read) total_readable++;
+                    if (can_write) total_writable++;
+                    if (can_notify) total_notify++;
                 }
 
                 free(characteristic);
             }
 
-            ESP_LOGI(TAG, "");
-            ESP_LOGI(TAG, "========== ATTACK SURFACE SUMMARY ==========");
-            ESP_LOGI(TAG, "  Services:        %d", svc_count);
-            ESP_LOGI(TAG, "  Readable (READ): %d", total_readable);
-            ESP_LOGI(TAG, "  Writable:        %d", total_writable);
-            ESP_LOGI(TAG, "  Notify/Indicate: %d", total_notify);
-            ESP_LOGI(TAG, "============================================");
-
             break;
         }
         case ESP_GATTC_DISCONNECT_EVT:
             ESP_LOGW(TAG, "DISCONNECT reason: %d", param->disconnect.reason);
-            gattc_context.connection_id = -1;
-            zv_bt_gattc_reset_services();
+            gattc_context.connection_id = 0;
+            gattc_context.connected = false;
+            services_count = 0;
             break;
         default:
             ESP_LOGI(TAG, "event not recognized: %d", event);

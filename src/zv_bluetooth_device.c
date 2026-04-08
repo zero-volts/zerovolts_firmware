@@ -123,8 +123,11 @@ void zv_bt_print_devices()
     ESP_LOGI(TAG, "-------------------------------");
     for (int idx = 0; idx < device_count; idx++)
     {
-        ESP_LOGI(TAG, "[%d] name: %s, mac: %s, Manufacturer: %s, service: %s, appearance: %s, rssi: %d",
-                idx, devices[idx].name, devices[idx].mac, devices[idx].manufacturer, devices[idx].service, devices[idx].appearance, devices[idx].rssi);
+        ESP_LOGI(TAG, "[%d] %s name: %s, mac: %s, Manufacturer: %s, service: %s, appearance: %s, rssi: %d",
+                idx,
+                devices[idx].connectable ? "[CONN]" : "[----]",
+                devices[idx].name, devices[idx].mac, devices[idx].manufacturer,
+                devices[idx].service, devices[idx].appearance, devices[idx].rssi);
     }
     ESP_LOGI(TAG, "-------------------------------");
 }

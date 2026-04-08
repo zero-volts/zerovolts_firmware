@@ -11,6 +11,7 @@
 #include "nvs_flash.h"
 #include "esp_bt.h"
 #include "esp_bt_main.h"
+#include "esp_gatt_common_api.h"
 
 static const char *TAG = "ZEROVOLTS_FIRMWARE";
 
