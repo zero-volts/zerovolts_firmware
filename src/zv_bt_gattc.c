@@ -150,7 +150,7 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
 
                 if (count == 0)
                 {
-                    ESP_LOGI(TAG, "|   (sin caracteristicas)");
+                    ESP_LOGI(TAG, "|   (without charasterictics)");
                     continue;
                 }
 

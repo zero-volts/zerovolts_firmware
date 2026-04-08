@@ -12,7 +12,7 @@
 static const char *TAG = "ZV_BLUETOOTH";
 
 // ============================================================================
-// Complete flow to scan and enumerate services and characteristics from devices
+//        BLE GATT Client – Full scan & enumeration flow
 // ============================================================================
 //
 //  Phase 1: Initialization (main.c)
@@ -24,98 +24,110 @@ static const char *TAG = "ZV_BLUETOOTH";
 //      +-- esp_bt_controller_mem_release(CLASSIC_BT)
 //      +-- esp_bt_controller_init() + enable(BLE)
 //      +-- esp_bluedroid_init() + enable()
-//      +-- esp_ble_gatt_set_local_mtu(500)
 //      |
-//      +-- zv_init_ble_handlers()  ----->  (esta funcion, ver abajo)
+//      +-- zv_init_ble_handlers()  -----> (this function, see below)
 //
 //
 //  Phase 2: Callback registration (zv_bluetooth.c)
-//  ===============================================
+//  ================================================
 //
 //  zv_init_ble_handlers()
 //      |
-//      +-- esp_ble_gap_register_callback()
-//      +-- esp_ble_gap_set_scan_params()
-//      +-- esp_ble_gattc_register_callback()
+//      +-- esp_ble_gap_register_callback(zv_bt_gap_event_handler)
+//      +-- esp_ble_gap_set_scan_params(&scan_params)
+//      |      |
+//      |      +--[event]--> ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT
+//      |                    triggers Phase 3
+//      |
+//      +-- esp_ble_gatt_set_local_mtu(500)
+//      +-- esp_ble_gattc_register_callback(zv_bt_gattc_event_handler)
 //      +-- esp_ble_gattc_app_register(0)
 //             |
-//             +--[evento]--> ESP_GATTC_REG_EVT
-//                            store gattc_if to future calls
+//             +--[event]--> ESP_GATTC_REG_EVT
+//                           store gattc_if for future calls
 //
 //
-//  Phase 3: BLE Scann (zv_bt_gap.c)
-//  ===================================
+//  Phase 3: BLE Scan (zv_bt_gap.c)
+//  ================================
 //
-//  [evento] ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT
+//  [event] ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT
 //      |
-//      +-- esp_ble_gap_start_scanning(15 seg)
+//      +-- esp_ble_gap_start_scanning(15 seconds)
 //             |
-//             |  (this repeat each time a new devices is detected)
+//             |  (repeats each time a device is detected)
 //             |
-//             +--[evento]--> ESP_GAP_SEARCH_INQ_RES_EVT
-//             |              parse name, MAC, manufacturer, RSSI
+//             +--[event]--> ESP_GAP_SEARCH_INQ_RES_EVT
+//             |              parse name, MAC, manufacturer, RSSI,
+//             |              service, appearance, connectable flag
 //             |              zv_bt_add_device()
 //             |
-//             |  (15 seconds later...)
+//             |  (after 15 seconds...)
 //             |
-//             +--[evento]--> ESP_GAP_SEARCH_INQ_CMPL_EVT
+//             +--[event]--> ESP_GAP_SEARCH_INQ_CMPL_EVT
 //                            |
 //                            +-- zv_bt_print_devices()
-//                            +-- zv_bt_get_closest_device()  // better RSSI [CONN]
+//                            +-- zv_bt_get_closest_device()  // best RSSI among [CONN]
 //                            |
-//                            +-- (if exists any target)
-//                                   |
-//                                   +-- esp_ble_gattc_open(target)
-//                                          |
-//                                          v
-//                                   Phase 4: connection
+//                            +-- (if a connectable target exists)
+//                            |      |
+//                            |      +-- esp_ble_gattc_open(target)
+//                            |             |
+//                            |             v
+//                            |      Phase 4: GATT Connection
+//                            |
+//                            +-- (otherwise) log warning, stop
 //
 //
 //  Phase 4: GATT Connection (zv_bt_gattc.c)
-//  =======================================
+//  =========================================
 //
-//  [evento] ESP_GATTC_CONNECT_EVT
+//  [event] ESP_GATTC_CONNECT_EVT
 //      |    store connection_id, connected = true
 //      v
-//  [evento] ESP_GATTC_OPEN_EVT
+//  [event] ESP_GATTC_OPEN_EVT
 //      |
 //      +-- (status OK?)
 //      |      |
 //      |     YES --> esp_ble_gattc_send_mtu_req()
 //      |      |             |
 //      |      |             v
-//      |      |      [evento] ESP_GATTC_CFG_MTU_EVT
+//      |      |      [event] ESP_GATTC_CFG_MTU_EVT
 //      |      |             |
 //      |      |             +-- esp_ble_gattc_search_service(NULL)
 //      |      |                        |
 //      |      |                        v
-//      |      |                 Phase 5: Enumeration
+//      |      |                 Phase 5: Service Enumeration
 //      |      |
-//      |     NO --> log error, end
+//      |     NO --> log error, stop
 //      |
 //      v
 //
 //
-//  Phase 5: Services enumeration (zv_bt_gattc.c)
-//  ==================================================
+//  Phase 5: Service & Characteristic Enumeration (zv_bt_gattc.c)
+//  ==============================================================
 //
-//  [evento] ESP_GATTC_SEARCH_RES_EVT  (x N, each per service)
-//      |    zv_bt_gatt_add_service() --> store UUID + handles
+//  [event] ESP_GATTC_SEARCH_RES_EVT  (x N, once per service)
+//      |    zv_bt_gatt_add_service() --> store UUID + start/end handles
 //      v
-//  [evento] ESP_GATTC_SEARCH_CMPL_EVT
+//  [event] ESP_GATTC_SEARCH_CMPL_EVT
 //      |
-//      +-- Per each service:
-//      |      +-- esp_ble_gattc_get_attr_count()    // how many charactersitics exists
-//      |      +-- esp_ble_gattc_get_all_char()      // getting data
-//      |      +-- Per each characteristic:
-//      |             +-- Print UUID, handle, properties
+//      +-- For each discovered service:
+//      |      +-- esp_ble_gattc_get_attr_count()   // count characteristics
+//      |      +-- esp_ble_gattc_get_all_char()      // fetch characteristic details
+//      |      +-- For each characteristic:
+//      |             +-- Format UUID
+//      |             +-- Print handle & properties (READ, WRITE, NOTIFY, INDICATE)
+//      |             +-- Classify access level
+//      |
+//      +-- Print summary (total readable / writable / notifiable)
 //
-//  DESCONEXION
-//  ===========
 //
-//  [evento] ESP_GATTC_DISCONNECT_EVT
+//  Disconnection
+//  =============
+//
+//  [event] ESP_GATTC_DISCONNECT_EVT
 //      +-- connected = false
-//      +-- zv_bt_gattc_reset_services()
+//      +-- services_count = 0  (reset discovered services list)
 //
 // ============================================================================
 void zv_init_ble_handlers()

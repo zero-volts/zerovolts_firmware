@@ -49,16 +49,68 @@ pio device monitor
 
 ```
 zerovolts_firmware/
-├── include/              # Headers publicos
-│   ├── zv_bluetooth.h        # Utilidades BLE (parsing, signatures)
-│   └── zv_bluetooth_device.h # Manejo de dispositivos descubiertos
-├── src/                  # Codigo fuente (lo unico que se compila)
-│   ├── main.c                # Punto de entrada, BLE scanner
-│   ├── zv_bluetooth.c
-│   └── zv_bluetooth_device.c
-├── docs/                 # Tutoriales (no se compilan)
-├── platformio.ini        # Configuracion de PlatformIO
-└── sdkconfig.default     # Configuracion de Bluetooth para ESP-IDF
+├── include/                      # Headers publicos
+│   ├── zv_bluetooth.h                # Registro de handlers BLE (GAP + GATTC)
+│   ├── zv_bluetooth_device.h         # Struct y manejo de dispositivos descubiertos
+│   ├── zv_bt_gap.h                   # Capa GAP: escaneo, parsing de advertising data
+│   ├── zv_bt_gattc.h                 # Capa GATT Client: conexion y discovery de servicios
+│   └── zv_format_utils.h            # Utilidades de formateo (MAC, UUID)
+├── src/                          # Codigo fuente (lo unico que se compila)
+│   ├── main.c                        # Punto de entrada: init NVS, controller, bluedroid
+│   ├── zv_bluetooth.c                # Registro de callbacks y scan params (orquestador)
+│   ├── zv_bluetooth_device.c         # Almacen de dispositivos (array estatico, dedup por MAC)
+│   ├── zv_bt_gap.c                   # Handler GAP: escaneo, base de firmas de fabricantes
+│   ├── zv_bt_gattc.c                 # Handler GATTC: MTU, services, characteristics
+│   └── zv_format_utils.c            # Formateo de MAC (XX:XX:...) y UUID (16/32/128 bit)
+├── docs/                         # Tutoriales (no se compilan)
+├── platformio.ini                # Configuracion de PlatformIO
+└── sdkconfig.default             # Configuracion de Bluetooth para ESP-IDF
+```
+
+### 5. Arquitectura del firmware
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                      main.c                             │
+│         NVS + BT Controller + Bluedroid init            │
+│                        │                                │
+│                zv_init_ble_handlers()                    │
+└────────────────────────┬────────────────────────────────┘
+                         │
+            ┌────────────┴────────────┐
+            │    zv_bluetooth.c       │
+            │  register callbacks     │
+            │  set scan params        │
+            │  set local MTU          │
+            │  register GATTC app     │
+            └─────┬─────────────┬─────┘
+                  │             │
+     ┌────────────┘             └────────────┐
+     │                                       │
+     ▼                                       ▼
+┌─────────────────────┐         ┌────────────────────────┐
+│   zv_bt_gap.c       │         │   zv_bt_gattc.c        │
+│                     │         │                        │
+│ GAP event handler   │         │ GATTC event handler    │
+│ - start scan        │         │ - store gattc_if       │
+│ - parse adv data    │         │ - MTU negotiation      │
+│ - manufacturer DB   │         │ - service discovery    │
+│ - appearance map    │         │ - char enumeration     │
+│ - service UUID map  │         │ - properties parsing   │
+│                     │  open   │                        │
+│ scan complete ──────┼────────>│                        │
+└────────┬────────────┘         └────────────────────────┘
+         │
+         ▼
+┌─────────────────────┐         ┌────────────────────────┐
+│zv_bluetooth_device.c│         │  zv_format_utils.c     │
+│                     │         │                        │
+│ device array (x35)  │         │ zv_format_mac_address()│
+│ add / dedup by MAC  │         │ zv_format_uuid()       │
+│ get closest (RSSI)  │         │  (16/32/128 bit)       │
+│ get by name         │         │                        │
+│ print device list   │         │                        │
+└─────────────────────┘         └────────────────────────┘
 ```
 
 ## Tutoriales
@@ -67,3 +119,4 @@ zerovolts_firmware/
 |---|------|-----------|
 | 00 | Fundamentos de Bluetooth y BLE | [00_fundamentos.md](docs/00_fundamentos.md) |
 | 01 | BLE Scanner - Descubrimiento de dispositivos | [01_ble_Scanner.md](docs/01_ble_Scanner.md) |
+| 02 | GATT Client - Enumeracion de servicios y caracteristicas | [02_gat_service_enumeration.md](docs/02_gat_service_enumeration.md) |
