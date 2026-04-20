@@ -1,8 +1,10 @@
 #include "zv_bluetooth_device.h"
+#include "zv_uart.h"
 #include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
+#include "zv_bt_gap.h"
 
 #define MAX_DEVICES 35
 #define DEFAULT_NAME "Unknown"
@@ -117,6 +119,8 @@ void zv_bt_add_device(zv_bt_device_t new_device)
     snprintf(device->manufacturer, sizeof(device->manufacturer), "%s",  new_device.manufacturer[0] ? new_device.manufacturer : DEFAULT_NAME);
     snprintf(device->service, sizeof(device->service), "%s",  new_device.service[0] ? new_device.service : DEFAULT_NAME);
     snprintf(device->appearance, sizeof(device->appearance), "%s",  new_device.appearance[0] ? new_device.appearance : DEFAULT_NAME);
+
+    zv_bt_send_scan_result_uart(device);
 }
 
 void zv_bt_print_devices()

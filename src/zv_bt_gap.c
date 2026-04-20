@@ -2,10 +2,12 @@
 #include "zv_bt_gattc.h"
 #include "zv_bluetooth_device.h"
 #include "zv_format_utils.h"
+#include "zv_uart.h"
 
 #include "esp_log.h"
 #include "esp_gattc_api.h"
 #include <string.h>
+#include <stdio.h>
 
 #define SCAN_DURATION_IN_SEC    15
 
@@ -283,7 +285,6 @@ void zv_bt_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_
     {
         case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
             ESP_LOGI(TAG, "scan params ready");
-            esp_ble_gap_start_scanning(SCAN_DURATION_IN_SEC);
             break;
         case ESP_GAP_BLE_SCAN_RESULT_EVT:
         {
@@ -306,12 +307,14 @@ void zv_bt_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_
                     memcpy(new_device.mac_address, scan_result.bda, sizeof(new_device.mac_address));
 
                     zv_bt_add_device(new_device);
+                    
 
                     break;
                 }
                 case ESP_GAP_SEARCH_INQ_CMPL_EVT:
                 {
                     ESP_LOGI(TAG, "scan complete");
+                    zv_uart_send_line("SCAN:DONE");
                     zv_bt_print_devices();
 
                     const zv_bt_device_t *near_device = zv_bt_get_closest_device();
@@ -354,4 +357,32 @@ void zv_bt_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_
         default:
             break;
     }
+}
+
+void zv_bt_start_scanning(int duration)
+{
+    esp_ble_gap_start_scanning(duration > 0 ? duration : SCAN_DURATION_IN_SEC);
+}
+void zv_bt_send_scan_result_uart(const zv_bt_device_t *device)
+{
+    if (!device)
+        return;
+
+    char line[384];
+    /*
+     * Limitamos explícitamente cada campo para que la línea UART completa
+     * siempre entre en el buffer local y no dispare -Wformat-truncation.
+     * Esto también deja un payload más estable para el parser del host.
+     */
+    snprintf(line, sizeof(line),
+        "SCAN:DEVICE|name=%.48s|mac=%.17s|rssi=%d|manufacturer=%.48s|service=%.32s|appearance=%.32s|connectable=%d",
+        device->name,
+        device->mac,
+        device->rssi,
+        device->manufacturer,
+        device->service,
+        device->appearance,
+        device->connectable ? 1 : 0);
+
+    zv_uart_send_line(line);
 }

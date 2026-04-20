@@ -2,6 +2,7 @@
 #define ZV_BT_GAP_H
 
 #include "esp_gap_ble_api.h"
+#include "zv_bluetooth_device.h"
 
 typedef struct {
     uint16_t company_id;
@@ -11,11 +12,13 @@ typedef struct {
 // https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf
 extern const zv_bt_signature_t zv_bt_signatures[];
 
+void zv_bt_start_scanning(int duration);
 const char *zv_bt_get_device_type(esp_bt_dev_type_t device_type);
 void zv_bt_get_manufacturer_name(struct ble_scan_result_evt_param scan_result, char *out_name, int out_length);
 void zv_bt_get_device_name(struct ble_scan_result_evt_param scan_result, char *out_name, int out_length);
 void zv_get_device_appearance(struct ble_scan_result_evt_param scan_result, char *out_name, int out_length);
 void zv_get_device_service(struct ble_scan_result_evt_param scan_result, char *out_name, int out_length);
+void zv_bt_send_scan_result_uart(const zv_bt_device_t *device);
 
 void zv_bt_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
 
