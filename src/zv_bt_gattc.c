@@ -1,6 +1,9 @@
 #include "zv_bt_gattc.h"
 #include "zv_format_utils.h"
+#include "zv_uart.h"
+#include "zv_uart_commands.h"
 #include "esp_log.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -54,9 +57,46 @@ void zv_bt_gatt_add_service(zv_bt_service_t new_service)
     zv_format_uuid(new_service.uuid.uuid.uuid128, new_service.uuid.len, uuid_str, sizeof(uuid_str));
 }
 
-zv_bt_gatt_ctx_t *zv_bt_gattc_get_context()
+void zv_bt_send_service_uart(const zv_bt_service_t *service)
+{
+    if (!service)
+        return;
+
+    char line[384];
+    /*
+     * Limitamos explícitamente cada campo para que la línea UART completa
+     * siempre entre en el buffer local y no dispare -Wformat-truncation.
+     * Esto también deja un payload más estable para el parser del host.
+     */
+    snprintf(line, sizeof(line),
+        "SCAN:DEVICE|name=%.48s|mac=%.17s|rssi=%d|manufacturer=%.48s|service=%.32s|appearance=%.32s|connectable=%d",
+        device->name,
+        device->mac,
+        device->rssi,
+        device->manufacturer,
+        device->service,
+        device->appearance,
+        device->connectable ? 1 : 0);
+
+    zv_uart_send_line(line);
+}
+
+zv_bt_gatt_ctx_t *zv_bt_gattc_get_context(void)
 {
     return &gattc_context;
+}
+
+void zv_bt_gatt_open_connection(uint8_t *device_mac, int addr_type)
+{
+    zv_bt_gatt_ctx_t *ctx = zv_bt_gattc_get_context();
+    esp_err_t open_result = esp_ble_gattc_open(gattc_context.gattc_if,
+        device_mac,
+        addr_type,
+        true
+    );
+
+    if (open_result != ESP_OK)
+        ESP_LOGE(TAG, "gattc open failed: %s", esp_err_to_name(open_result));
 }
 
 void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param)
@@ -80,11 +120,14 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
             gattc_context.connection_id = param->connect.conn_id;
             gattc_context.connected = true;
             ESP_LOGI(TAG, "ESP_GATTC_CONNECT_EVT connection ID: %d", param->connect.conn_id);
+
+            zv_uart_send_line(BT_COMMAND_RES_CONNECT_START);
             break;
 
         case ESP_GATTC_OPEN_EVT:
             if (param->open.status == ESP_GATT_OK)
             {
+                zv_uart_send_line(BT_COMMAND_RES_CONNECT_OK);
                 ESP_LOGI(TAG, "ESP_GATTC_OPEN_EVT connection ID: %d", param->open.conn_id);
                 esp_ble_gattc_send_mtu_req(gattc_if, param->open.conn_id);
             }
@@ -117,7 +160,10 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
             ESP_LOGI(TAG, "services found: %d", services_count);
 
             if (services_count <= 0)
+            {
+                zv_uart_send_line(BT_COMMAND_RES_DISCOVER_DONE);
                 break;
+            }
 
             int total_readable = 0;
             int total_writable = 0;
@@ -134,7 +180,13 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
                 zv_bt_service_t service = services[index];
 
                 char svc_uuid_str[37];
+                char uart_line[96];
                 zv_format_uuid(service.uuid.uuid.uuid128, service.uuid.len, svc_uuid_str, sizeof(svc_uuid_str));
+
+                snprintf(uart_line, sizeof(uart_line), "%s:%d:%s",
+                         BT_COMMAND_RES_DISCOVER_SERVICE, index + 1, svc_uuid_str);
+                zv_uart_send_line(uart_line);
+
                 ESP_LOGI(TAG, "");
                 ESP_LOGI(TAG, "+--- Service %d (handles %d-%d) ---",
                          index + 1, service.start_handle, service.end_handle);
@@ -181,9 +233,18 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
                 for (int idx = 0; idx < count; idx++)
                 {
                     char uuid_str[37];
+                    char uart_line[128];
                     zv_format_uuid(characteristic[idx].uuid.uuid.uuid128, characteristic[idx].uuid.len, uuid_str, sizeof(uuid_str));
 
                     uint8_t props = characteristic[idx].properties;
+                    snprintf(uart_line, sizeof(uart_line), "%s:%d:%d:%s:%u",
+                             BT_COMMAND_RES_DISCOVER_CHAR,
+                             index + 1,
+                             idx + 1,
+                             uuid_str,
+                             props);
+                    zv_uart_send_line(uart_line);
+
                     ESP_LOGI(TAG, "|");
                     ESP_LOGI(TAG, "|   +-- Characteristic %d (handle: %d)", idx + 1, characteristic[idx].char_handle);
                     ESP_LOGI(TAG, "|   |   UUID: %s", uuid_str);
@@ -216,6 +277,7 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
                 free(characteristic);
             }
 
+            zv_uart_send_line(BT_COMMAND_RES_DISCOVER_DONE);
             break;
         }
         case ESP_GATTC_DISCONNECT_EVT:

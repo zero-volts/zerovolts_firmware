@@ -10,6 +10,7 @@ extern "C" {
 void zv_uart_init(void);
 void zv_uart_send_line(const char *line);
 bool zv_uart_is_ready(void);
+void zv_uart_parse_commands(void);
 
 #ifdef __cplusplus
 }

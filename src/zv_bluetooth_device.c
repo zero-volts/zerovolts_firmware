@@ -123,6 +123,11 @@ void zv_bt_add_device(zv_bt_device_t new_device)
     zv_bt_send_scan_result_uart(device);
 }
 
+void zv_bt_clear_devices()
+{ 
+    device_count = 0; 
+}
+
 void zv_bt_print_devices()
 {
     ESP_LOGI(TAG, "");
