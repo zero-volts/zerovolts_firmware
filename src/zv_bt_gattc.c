@@ -13,6 +13,9 @@ static const char *TAG = "ZV_BT_GATTC";
 static zv_bt_service_t discovered_services[MAX_SERVICES];
 static int services_count = 0;
 
+static char current_mac_str[18] = {0};
+static bool user_requested_disconnect = false;
+
 // internal context to manager gatcc id and connection id between calls
 static zv_bt_gatt_ctx_t gattc_context = {
     .gattc_if = ESP_GATT_IF_NONE,
@@ -57,30 +60,6 @@ void zv_bt_gatt_add_service(zv_bt_service_t new_service)
     zv_format_uuid(new_service.uuid.uuid.uuid128, new_service.uuid.len, uuid_str, sizeof(uuid_str));
 }
 
-void zv_bt_send_service_uart(const zv_bt_service_t *service)
-{
-    if (!service)
-        return;
-
-    char line[384];
-    /*
-     * Limitamos explícitamente cada campo para que la línea UART completa
-     * siempre entre en el buffer local y no dispare -Wformat-truncation.
-     * Esto también deja un payload más estable para el parser del host.
-     */
-    snprintf(line, sizeof(line),
-        "SCAN:DEVICE|name=%.48s|mac=%.17s|rssi=%d|manufacturer=%.48s|service=%.32s|appearance=%.32s|connectable=%d",
-        device->name,
-        device->mac,
-        device->rssi,
-        device->manufacturer,
-        device->service,
-        device->appearance,
-        device->connectable ? 1 : 0);
-
-    zv_uart_send_line(line);
-}
-
 zv_bt_gatt_ctx_t *zv_bt_gattc_get_context(void)
 {
     return &gattc_context;
@@ -88,7 +67,12 @@ zv_bt_gatt_ctx_t *zv_bt_gattc_get_context(void)
 
 void zv_bt_gatt_open_connection(uint8_t *device_mac, int addr_type)
 {
-    zv_bt_gatt_ctx_t *ctx = zv_bt_gattc_get_context();
+    user_requested_disconnect = false;
+    snprintf(current_mac_str, sizeof(current_mac_str),
+             "%02x:%02x:%02x:%02x:%02x:%02x",
+             device_mac[0], device_mac[1], device_mac[2],
+             device_mac[3], device_mac[4], device_mac[5]);
+
     esp_err_t open_result = esp_ble_gattc_open(gattc_context.gattc_if,
         device_mac,
         addr_type,
@@ -96,7 +80,22 @@ void zv_bt_gatt_open_connection(uint8_t *device_mac, int addr_type)
     );
 
     if (open_result != ESP_OK)
+    {
         ESP_LOGE(TAG, "gattc open failed: %s", esp_err_to_name(open_result));
+        zv_uart_send_formatted_line("%s|mac=%s|reason=%d",
+                 BT_COMMAND_RES_CONNECT_FAIL, current_mac_str, (int)open_result);
+    }
+}
+
+void zv_bt_gatt_close_connection(void)
+{
+    if (!gattc_context.connected)
+        return;
+
+    user_requested_disconnect = true;
+    esp_err_t rc = esp_ble_gattc_close(gattc_context.gattc_if, gattc_context.connection_id);
+    if (rc != ESP_OK)
+        ESP_LOGE(TAG, "gattc close failed: %s", esp_err_to_name(rc));
 }
 
 void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param)
@@ -120,19 +119,22 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
             gattc_context.connection_id = param->connect.conn_id;
             gattc_context.connected = true;
             ESP_LOGI(TAG, "ESP_GATTC_CONNECT_EVT connection ID: %d", param->connect.conn_id);
-
-            zv_uart_send_line(BT_COMMAND_RES_CONNECT_START);
             break;
 
         case ESP_GATTC_OPEN_EVT:
             if (param->open.status == ESP_GATT_OK)
             {
-                zv_uart_send_line(BT_COMMAND_RES_CONNECT_OK);
                 ESP_LOGI(TAG, "ESP_GATTC_OPEN_EVT connection ID: %d", param->open.conn_id);
+                
+                zv_uart_send_formatted_line("%s|mac=%s|mtu=%d",
+                         BT_COMMAND_RES_CONNECT_OK, current_mac_str, param->open.mtu);
+
                 esp_ble_gattc_send_mtu_req(gattc_if, param->open.conn_id);
             }
             else {
                 ESP_LOGE(TAG, "ESP_GATTC_OPEN_EVT failed, status: %d", param->open.status);
+                zv_uart_send_formatted_line("%s|mac=%s|reason=%d",
+                         BT_COMMAND_RES_CONNECT_FAIL, current_mac_str, param->open.status);
             }
 
             break;
@@ -141,6 +143,7 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
             {
                 ESP_LOGW(TAG, "MTU negotiation failed (status=%d), searching services anyway...", param->cfg_mtu.status);
             }
+            zv_uart_send_line(BT_COMMAND_RES_DISCOVER_START);
             esp_ble_gattc_search_service(gattc_if, param->cfg_mtu.conn_id, NULL);
             break;
         case ESP_GATTC_SEARCH_RES_EVT:
@@ -159,9 +162,16 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
             ESP_LOGI(TAG, "ESP_GATTC_SEARCH_CMPL_EVT");
             ESP_LOGI(TAG, "services found: %d", services_count);
 
+            if (param->search_cmpl.status != ESP_GATT_OK)
+            {
+                zv_uart_send_formatted_line("%s|reason=%d",
+                         BT_COMMAND_RES_DISCOVER_FAIL, param->search_cmpl.status);
+                break;
+            }
+
             if (services_count <= 0)
             {
-                zv_uart_send_line(BT_COMMAND_RES_DISCOVER_DONE);
+                zv_uart_send_line("DISCOVER:DONE|services=0|chars=0");
                 break;
             }
 
@@ -169,28 +179,16 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
             int total_writable = 0;
             int total_notify = 0;
 
-            ESP_LOGI(TAG, "");
-            ESP_LOGI(TAG, "======================================================");
-            ESP_LOGI(TAG, "           GATT Device database                       ");
-            ESP_LOGI(TAG, "======================================================");
-
             zv_bt_service_t *services = discovered_services;
             for (int index = 0; index < services_count; index++)
             {
                 zv_bt_service_t service = services[index];
 
                 char svc_uuid_str[37];
-                char uart_line[96];
                 zv_format_uuid(service.uuid.uuid.uuid128, service.uuid.len, svc_uuid_str, sizeof(svc_uuid_str));
-
-                snprintf(uart_line, sizeof(uart_line), "%s:%d:%s",
+               
+                zv_uart_send_formatted_line("%s|svc=%d|uuid=%s",
                          BT_COMMAND_RES_DISCOVER_SERVICE, index + 1, svc_uuid_str);
-                zv_uart_send_line(uart_line);
-
-                ESP_LOGI(TAG, "");
-                ESP_LOGI(TAG, "+--- Service %d (handles %d-%d) ---",
-                         index + 1, service.start_handle, service.end_handle);
-                ESP_LOGI(TAG, "|    UUID: %s", svc_uuid_str);
 
                 uint16_t count = 0;
                 esp_ble_gattc_get_attr_count(gattc_if, gattc_context.connection_id,
@@ -202,7 +200,7 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
 
                 if (count == 0)
                 {
-                    ESP_LOGI(TAG, "|   (without charasterictics)");
+                    ESP_LOGI(TAG, "| (without charasterictics)");
                     continue;
                 }
 
@@ -233,41 +231,20 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
                 for (int idx = 0; idx < count; idx++)
                 {
                     char uuid_str[37];
-                    char uart_line[128];
                     zv_format_uuid(characteristic[idx].uuid.uuid.uuid128, characteristic[idx].uuid.len, uuid_str, sizeof(uuid_str));
 
                     uint8_t props = characteristic[idx].properties;
-                    snprintf(uart_line, sizeof(uart_line), "%s:%d:%d:%s:%u",
+                    zv_uart_send_formatted_line("%s|svc=%d|char=%d|uuid=%s|props=0x%02x|handle=%d",
                              BT_COMMAND_RES_DISCOVER_CHAR,
                              index + 1,
                              idx + 1,
                              uuid_str,
-                             props);
-                    zv_uart_send_line(uart_line);
-
-                    ESP_LOGI(TAG, "|");
-                    ESP_LOGI(TAG, "|   +-- Characteristic %d (handle: %d)", idx + 1, characteristic[idx].char_handle);
-                    ESP_LOGI(TAG, "|   |   UUID: %s", uuid_str);
-                    ESP_LOGI(TAG, "|   |   Properties: %s%s%s%s%s",
-                             (props & ESP_GATT_CHAR_PROP_BIT_READ)     ? "READ "     : "",
-                             (props & ESP_GATT_CHAR_PROP_BIT_WRITE)    ? "WRITE "    : "",
-                             (props & ESP_GATT_CHAR_PROP_BIT_WRITE_NR) ? "WRITE_NR " : "",
-                             (props & ESP_GATT_CHAR_PROP_BIT_NOTIFY)   ? "NOTIFY "   : "",
-                             (props & ESP_GATT_CHAR_PROP_BIT_INDICATE) ? "INDICATE " : "");
+                             props,
+                             characteristic[idx].char_handle);
 
                     bool can_read = props & ESP_GATT_CHAR_PROP_BIT_READ;
                     bool can_write = props & (ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_WRITE_NR);
                     bool can_notify = props & (ESP_GATT_CHAR_PROP_BIT_NOTIFY | ESP_GATT_CHAR_PROP_BIT_INDICATE);
-
-                    const char *access_level;
-                    if (can_read && can_write)       access_level = "READ + WRITE";
-                    else if (can_read && can_notify)  access_level = "READ + SUBSCRIPTION";
-                    else if (can_read)                access_level = "ONLY READ";
-                    else if (can_write)               access_level = "ONLY WRITE";
-                    else if (can_notify)              access_level = "ONLY NOTIFY/INDICATE";
-                    else                              access_level = "WITHOUT ACCESS";
-
-                    ESP_LOGI(TAG, "|   |   Access: %s", access_level);
 
                     if (can_read) total_readable++;
                     if (can_write) total_writable++;
@@ -277,15 +254,34 @@ void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_i
                 free(characteristic);
             }
 
-            zv_uart_send_line(BT_COMMAND_RES_DISCOVER_DONE);
+            int total_chars = total_readable + total_writable + total_notify;
+            zv_uart_send_formatted_line("%s|services=%d|chars=%d",
+                     BT_COMMAND_RES_DISCOVER_DONE, services_count, total_chars);
             break;
         }
         case ESP_GATTC_DISCONNECT_EVT:
+        {
             ESP_LOGW(TAG, "DISCONNECT reason: %d", param->disconnect.reason);
+            if (user_requested_disconnect)
+            {
+                zv_uart_send_formatted_line("%s|mac=%s",
+                         BT_COMMAND_RES_DISCONNECT_OK, current_mac_str);
+            }
+            else
+            {
+                zv_uart_send_formatted_line("%s|mac=%s|reason=%d",
+                         BT_COMMAND_RES_CONNECT_LOST, current_mac_str,
+                         param->disconnect.reason);
+            }
+
             gattc_context.connection_id = 0;
             gattc_context.connected = false;
             services_count = 0;
+            user_requested_disconnect = false;
+            current_mac_str[0] = '\0';
+
             break;
+        }
         default:
             ESP_LOGI(TAG, "event not recognized: %d", event);
             break;

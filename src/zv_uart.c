@@ -27,6 +27,7 @@ static bool uart_ready = false;
 static void handle_test(char *options);
 static void handle_bt_scan(char *options);
 static void handle_bt_connection(char *options);
+static void handle_bt_disconnect(char *options);
 
 typedef void (*command_handler_t)(char *options);
 typedef struct {
@@ -38,6 +39,7 @@ static const command_entry_t commands[] = {
     { UART_COMMAND_REQ_TEST, handle_test },
     { BT_COMMAND_REQ_SCANN, handle_bt_scan },
     { BT_COMMAND_REQ_CONNECT, handle_bt_connection },
+    { BT_COMMAND_REQ_DISCONNECT, handle_bt_disconnect },
 };
 
 static void handle_test(char *options)
@@ -82,6 +84,12 @@ static void handle_bt_connection(char *options)
     zv_bt_gatt_open_connection(mac, addr_type);
 }
 
+static void handle_bt_disconnect(char *options)
+{
+    (void)options;
+    zv_bt_gatt_close_connection();
+}
+
 void zv_uart_init(void)
 {
     const uart_config_t cfg = {
@@ -108,6 +116,22 @@ void zv_uart_send_line(const char *line)
 
     uart_write_bytes(ZV_UART_PORT, line, strlen(line));
     uart_write_bytes(ZV_UART_PORT, "\r\n", 2);
+}
+
+void zv_uart_send_formatted_line(const char *message, ...)
+{
+    if (!message)
+        return;
+
+    va_list args;
+    va_start(args, message);
+
+    char msg[1024];
+    vsnprintf(msg, sizeof(msg), message, args);
+
+    va_end(args);
+
+    zv_uart_send_line(msg);
 }
 
 bool zv_uart_is_ready(void)

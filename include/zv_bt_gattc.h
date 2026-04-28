@@ -18,6 +18,7 @@ typedef struct {
 void zv_bt_gatt_add_service(zv_bt_service_t new_service);
 zv_bt_gatt_ctx_t *zv_bt_gattc_get_context(void);
 void zv_bt_gatt_open_connection(uint8_t *device_mac, int addr_type);
+void zv_bt_gatt_close_connection(void);
 
 void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param);
 

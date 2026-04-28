@@ -315,37 +315,6 @@ void zv_bt_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_
                 {
                     ESP_LOGI(TAG, "scan complete");
                     zv_uart_send_line(BT_COMMAND_RES_SCANN_DONE);
-                    // zv_bt_print_devices();
-
-                    // const zv_bt_device_t *near_device = zv_bt_get_closest_device();
-                    // if (near_device == NULL)
-                    // {
-                    //     ESP_LOGW(TAG, "No connectable devices found");
-                    //     break;
-                    // }
-
-                    // ESP_LOGI(TAG, "");
-                    // ESP_LOGI(TAG, ">>> Selected target (better RSSI in [CONN]):");
-                    // ESP_LOGI(TAG, "    Name: %s", near_device->name);
-                    // ESP_LOGI(TAG, "    MAC:    %s", near_device->mac);
-                    // ESP_LOGI(TAG, "    RSSI:   %d dBm", near_device->rssi);
-                    // ESP_LOGI(TAG, "    Manuf:  %s", near_device->manufacturer);
-                    // ESP_LOGI(TAG, "    Addr:   %s", near_device->addr_type == BLE_ADDR_TYPE_PUBLIC ? "PUBLIC" : "RANDOM");
-                    // ESP_LOGI(TAG, "");
-                    // ESP_LOGI(TAG, "connecting as a GATT client...");
-
-                    // zv_bt_gatt_ctx_t *ctx = zv_bt_gattc_get_context();
-                    // esp_err_t open_result = esp_ble_gattc_open(ctx->gattc_if,
-                    //     (uint8_t *)near_device->mac_address,
-                    //     near_device->addr_type,
-                    //     true
-                    // );
-
-                    // if (open_result != ESP_OK)
-                    // {
-                    //     ESP_LOGE(TAG, "gattc open failed: %s", esp_err_to_name(open_result));
-                    // }
-
                     break;
                 }
                 default:
@@ -369,21 +338,13 @@ void zv_bt_send_scan_result_uart(const zv_bt_device_t *device)
     if (!device)
         return;
 
-    char line[384];
-    /*
-     * Limitamos explícitamente cada campo para que la línea UART completa
-     * siempre entre en el buffer local y no dispare -Wformat-truncation.
-     * Esto también deja un payload más estable para el parser del host.
-     */
-    snprintf(line, sizeof(line),
-        "SCAN:DEVICE|name=%.48s|mac=%.17s|rssi=%d|manufacturer=%.48s|service=%.32s|appearance=%.32s|connectable=%d",
+    zv_uart_send_formatted_line( "SCAN:DEVICE|name=%.48s|mac=%.17s|rssi=%d|manufacturer=%.48s|service=%.32s|appearance=%.32s|connectable=%d|addr_type=%d",
         device->name,
         device->mac,
         device->rssi,
         device->manufacturer,
         device->service,
         device->appearance,
-        device->connectable ? 1 : 0);
-
-    zv_uart_send_line(line);
+        device->connectable ? 1 : 0,
+        (int)device->addr_type);
 }
