@@ -314,7 +314,7 @@ void zv_bt_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_
                 case ESP_GAP_SEARCH_INQ_CMPL_EVT:
                 {
                     ESP_LOGI(TAG, "scan complete");
-                    zv_uart_send_line(BT_COMMAND_RES_SCANN_DONE);
+                    zv_uart_send_line(BT_COMMAND_RES_SCAN_DONE);
                     break;
                 }
                 default:

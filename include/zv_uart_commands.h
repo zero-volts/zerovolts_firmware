@@ -6,11 +6,11 @@
 
 //-- UART COMMANDS -- //
 
-#define BT_COMMAND_REQ_SCANN        "SCAN"                  // User requests to start scanning
-#define BT_COMMAND_RES_SCANN_START  "SCAN:START"            // ESP32 notifies that scanning has started
-#define BT_COMMAND_RES_SCANN_DONE   "SCAN:DONE"             // ESP32 notifies that scanning has finished
-#define BT_COMMAND_RES_SCANN_DEVICE "SCAN:DEVICE"           // ESP32 sends a discovered device result
-#define BT_COMMAND_RES_SCANN_UPDATE "SCAN:UPDATE"           // ESP32 sends an update for scanned devices
+#define BT_COMMAND_REQ_SCAN        "SCAN"                  // User requests to start scanning
+#define BT_COMMAND_RES_SCAN_START  "SCAN:START"            // ESP32 notifies that scanning has started
+#define BT_COMMAND_RES_SCAN_DONE   "SCAN:DONE"             // ESP32 notifies that scanning has finished
+#define BT_COMMAND_RES_SCAN_DEVICE "SCAN:DEVICE"           // ESP32 sends a discovered device result
+#define BT_COMMAND_RES_SCAN_UPDATE "SCAN:UPDATE"           // ESP32 sends an update for scanned devices
 
 //-- CONNECT -- //
 

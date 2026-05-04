@@ -37,7 +37,7 @@ typedef struct {
 
 static const command_entry_t commands[] = {
     { UART_COMMAND_REQ_TEST, handle_test },
-    { BT_COMMAND_REQ_SCANN, handle_bt_scan },
+    { BT_COMMAND_REQ_SCAN, handle_bt_scan },
     { BT_COMMAND_REQ_CONNECT, handle_bt_connection },
     { BT_COMMAND_REQ_DISCONNECT, handle_bt_disconnect },
 };
@@ -51,7 +51,7 @@ static void handle_bt_scan(char *options)
 {
     zv_bt_clear_devices();
     zv_bt_start_scanning(15);
-    zv_uart_send_line(BT_COMMAND_RES_SCANN_START);
+    zv_uart_send_line(BT_COMMAND_RES_SCAN_START);
 }
 
 static void handle_bt_connection(char *options)
