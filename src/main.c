@@ -43,7 +43,10 @@ void app_main(void)
     if (zv_uart_is_ready())
         zv_uart_send_line("READY");
 
-    zv_subghz_init();
+    if (zv_subghz_init() == ESP_OK)
+        ESP_LOGI(TAG, "CC1101 READY");
+    else
+        ESP_LOGE(TAG, "CC1101 NOT_FOUND — revisar cableado SPI");
 
     while (1) {
         zv_uart_parse_commands();

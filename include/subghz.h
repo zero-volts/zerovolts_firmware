@@ -18,18 +18,16 @@
 #define ZV_SUB_GHZ_PIN_GDO2     26
 
 // SPI communication
-#define ZV_SUB_GHZ_PIN_CSN      5            
+#define ZV_SUB_GHZ_PIN_CSN      5
 #define ZV_SUB_GHZ_PIN_SCK      14
-#define ZV_SUB_GHZ_PIN_MOSI     13       
+#define ZV_SUB_GHZ_PIN_MOSI     13
 #define ZV_SUB_GHZ_PIN_MISO     25
 
 #define ZV_SUB_GHZ_SPI_HOST     SPI3_HOST
-  
+
 esp_err_t zv_subghz_init(void);
 void zv_subghz_deinit(void);
 uint8_t zv_subghz_read_partnum(void);
 uint8_t zv_subghz_read_version(void);
 
 #endif /* ZV_SUB_GHZ_H */
-
-
