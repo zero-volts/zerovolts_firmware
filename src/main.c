@@ -1,5 +1,6 @@
 #include "zv_bluetooth.h"
 #include "zv_uart.h"
+#include "subghz.h"
 
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -41,6 +42,8 @@ void app_main(void)
 
     if (zv_uart_is_ready())
         zv_uart_send_line("READY");
+
+    zv_subghz_init();
 
     while (1) {
         zv_uart_parse_commands();
