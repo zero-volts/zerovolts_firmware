@@ -1,16 +1,12 @@
 // https://docs.espressif.com/projects/esp-idf/en/v4.2/esp32s2/api-reference/peripherals/spi_master.html#_CPPv416spi_bus_config_t
+// https://www.coralradio.com/cc1101-433mhz-module-guide.html
+// https://gist.github.com/Taylor-eOS/0882416612accbeee27b064519ef4d35
 #include "subghz.h"
+#include "cc1101.h"
 
 #include "driver/spi_master.h"
 #include "driver/gpio.h"   // gpio_config(), gpio_set_level()
 #include "esp_rom_sys.h"   // esp_rom_delay_us()
-
-#define SPI_CLOCK_VELOCITY (4 * 1000 * 1000) // 4 MHz
-// Command strobes
-#define CC_SRES         0x30    // Reset command
-#define CC_PARTNUM      0x30
-#define CC_VERSION      0x31
-#define CC_READ_BURST   0xC0
 
 static spi_device_handle_t device_handle = NULL;
 
@@ -38,7 +34,7 @@ static esp_err_t spi_attach_device(void)
         .spics_io_num = ZV_SUB_GHZ_PIN_CSN,
         .queue_size = 4,
         .mode = 0,
-        .clock_speed_hz = SPI_CLOCK_VELOCITY
+        .clock_speed_hz = CC1101_SPI_CLOCK_HZ
     };
 
     return spi_bus_add_device(ZV_SUB_GHZ_SPI_HOST, &dev, &device_handle);
@@ -64,31 +60,24 @@ static esp_err_t zv_initialize_bus(void)
     return ESP_OK;
 }
 
-static uint8_t zv_read_status_reg(uint8_t address)
+//TODO: mover a cc1101
+static esp_err_t zv_wait_for_rx()
 {
-    // All transactions on the SPI interface start with a header byte containing a R/W bit, a burst
-    // access bit (B), and a 6-bit address (A5 – A0).
-    // 1st bit = read/write
-    // 2nd bit = burst
-    // 3rd/7th = addresses to read/write
+    for (int i = 0; i < 100; i++)
+    {
+        uint8_t state = zv_cc1101_read_status_register(CC1101_STATUS_MARCSTATE);
+        state &= 0x1F;
 
-    // CC_PARTNUM/0x30      = 0 0 1 1 0 0 0 0
-    // CC_READ_BURST/0xC0   = 1 1 0 0 0 0 0 0
-    //                      ------------------ OR
-    // partnum byte buffer  = 1 1 1 1 0 0 0 0
+        if (state == CC1101_MARCSTATE_RX)
+        {
+            printf("state ready: 0x%02X\n", state);
+            return ESP_OK;
+        }
+            
+        esp_rom_delay_us(100);
+    }
 
-    uint8_t rx[2] = { 0 };
-    // tx[0]: header (read + burst); tx[1]: 0x00 padding so the chip can clock out the value into rx[1]
-    uint8_t tx[2] = { (uint8_t)(address | CC_READ_BURST), 0x00 };
-
-    spi_transaction_t transaction = {
-        .length = 16,
-        .tx_buffer = tx,
-        .rx_buffer = rx
-    };
-
-    spi_device_polling_transmit(device_handle, &transaction);
-    return rx[1];
+    return ESP_ERR_TIMEOUT;
 }
 
 esp_err_t zv_subghz_init(void)
@@ -104,38 +93,35 @@ esp_err_t zv_subghz_init(void)
     if (res != ESP_OK)
         return res;
 
-    // Software reset (SRES strobe). The byte goes through tx_buffer
-    uint8_t cmd = CC_SRES;
-    spi_transaction_t transaction = {
-        .length    = 8,
-        .tx_buffer = &cmd
-    };
+    zv_cc1101_init(device_handle);
 
-    spi_device_polling_transmit(device_handle, &transaction);
+    // Software reset (SRES strobe). The byte goes through tx_buffer
+    zv_cc1101_send_strobe(CC1101_STROBE_SRES);
 
     // Without this wait, the first register reads could back as garbage.
     esp_rom_delay_us(1000);
 
-    uint8_t partnum = zv_subghz_read_partnum();
-    uint8_t version = zv_subghz_read_version();
+    uint8_t partnum = zv_cc1101_read_partnum();
+    uint8_t version = zv_cc1101_read_version();
     printf("version: 0x%02X - parnum: 0x%02X\n", version, partnum);
 
-    // PARTNUM is always 0x00 from the factory; VERSION is 0x14 (or 0x04 on old
-    // chip). Anything else means the chip is not responding / SPI is wrong.
+    // PARTNUM is always 0x00 from the factory; VERSION is 0x14 (or 0x04 on old chip). 
+    // Anything else means the chip is not responding / SPI is wrong.
     if (partnum != 0x00 || (version != 0x14 && version != 0x04))
         return ESP_ERR_NOT_FOUND;
 
+    res = zv_cc1101_config_and_verify();
+    if (res != ESP_OK)
+        return res;
+       
+    zv_cc1101_send_strobe(CC1101_STROBE_SRX);
+    zv_wait_for_rx();
+
+    esp_rom_delay_us(3000);
+    int8_t rssi = zv_cc1101_get_rssi_dbm();
+    printf("rssi: %d\n", rssi);
+
     return ESP_OK;
-}
-
-uint8_t zv_subghz_read_partnum(void)
-{
-    return zv_read_status_reg(CC_PARTNUM);
-}
-
-uint8_t zv_subghz_read_version(void)
-{
-    return zv_read_status_reg(CC_VERSION);
 }
 
 void zv_subghz_deinit(void)

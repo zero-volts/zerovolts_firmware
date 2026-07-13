@@ -27,7 +27,5 @@
 
 esp_err_t zv_subghz_init(void);
 void zv_subghz_deinit(void);
-uint8_t zv_subghz_read_partnum(void);
-uint8_t zv_subghz_read_version(void);
 
 #endif /* ZV_SUB_GHZ_H */
