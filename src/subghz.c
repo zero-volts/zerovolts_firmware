@@ -3,6 +3,7 @@
 // https://gist.github.com/Taylor-eOS/0882416612accbeee27b064519ef4d35
 #include "subghz.h"
 #include "cc1101.h"
+#include "zv_spi_bus.h"
 
 #include "driver/spi_master.h"
 #include "driver/gpio.h"   // gpio_config(), gpio_set_level()
@@ -37,47 +38,7 @@ static esp_err_t spi_attach_device(void)
         .clock_speed_hz = CC1101_SPI_CLOCK_HZ
     };
 
-    return spi_bus_add_device(ZV_SUB_GHZ_SPI_HOST, &dev, &device_handle);
-}
-
-static esp_err_t zv_initialize_bus(void)
-{
-     // setup the pinout to communication through GPIO matrix
-    spi_bus_config_t bus = {
-        .mosi_io_num = ZV_SUB_GHZ_PIN_MOSI,
-        .miso_io_num = ZV_SUB_GHZ_PIN_MISO,
-        .sclk_io_num = ZV_SUB_GHZ_PIN_SCK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 256
-    };
-
-    esp_err_t res = spi_bus_initialize(ZV_SUB_GHZ_SPI_HOST, &bus, SPI_DMA_CH_AUTO);
-    if (res != ESP_OK) {
-        return res;
-    }
-
-    return ESP_OK;
-}
-
-//TODO: mover a cc1101
-static esp_err_t zv_wait_for_rx()
-{
-    for (int i = 0; i < 100; i++)
-    {
-        uint8_t state = zv_cc1101_read_status_register(CC1101_STATUS_MARCSTATE);
-        state &= 0x1F;
-
-        if (state == CC1101_MARCSTATE_RX)
-        {
-            printf("state ready: 0x%02X\n", state);
-            return ESP_OK;
-        }
-            
-        esp_rom_delay_us(100);
-    }
-
-    return ESP_ERR_TIMEOUT;
+    return zv_spi_bus_add_device(&dev, &device_handle);
 }
 
 esp_err_t zv_subghz_init(void)
@@ -85,7 +46,7 @@ esp_err_t zv_subghz_init(void)
     zv_manual_reset();
 
     // SPI bus + device. From spi_attach_device() on, the driver owns CS.
-    esp_err_t res = zv_initialize_bus();
+    esp_err_t res = zv_spi_bus_init();
     if (res != ESP_OK)
         return res;
 
@@ -105,7 +66,7 @@ esp_err_t zv_subghz_init(void)
     uint8_t version = zv_cc1101_read_version();
     printf("version: 0x%02X - parnum: 0x%02X\n", version, partnum);
 
-    // PARTNUM is always 0x00 from the factory; VERSION is 0x14 (or 0x04 on old chip). 
+    // PARTNUM is always 0x00 from the factory; VERSION is 0x14 (or 0x04 on old chip).
     // Anything else means the chip is not responding / SPI is wrong.
     if (partnum != 0x00 || (version != 0x14 && version != 0x04))
         return ESP_ERR_NOT_FOUND;
@@ -113,9 +74,9 @@ esp_err_t zv_subghz_init(void)
     res = zv_cc1101_config_and_verify();
     if (res != ESP_OK)
         return res;
-       
+
     zv_cc1101_send_strobe(CC1101_STROBE_SRX);
-    zv_wait_for_rx();
+    zv_cc1101_wait_for_rx();
 
     esp_rom_delay_us(3000);
     int8_t rssi = zv_cc1101_get_rssi_dbm();
@@ -124,13 +85,18 @@ esp_err_t zv_subghz_init(void)
     return ESP_OK;
 }
 
+int8_t zv_subghz_get_rssi_dbm(void)
+{
+    return zv_cc1101_get_rssi_dbm();
+}
+
 void zv_subghz_deinit(void)
 {
     if (device_handle != NULL)
     {
-        spi_bus_remove_device(device_handle);
+        zv_spi_bus_remove_device(device_handle);
         device_handle = NULL;
     }
 
-    spi_bus_free(ZV_SUB_GHZ_SPI_HOST);
+    zv_spi_bus_free();
 }

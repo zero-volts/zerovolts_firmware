@@ -35,23 +35,23 @@ esp_err_t zv_cc1101_init(spi_device_handle_t handle);
 esp_err_t zv_cc1101_send_strobe(uint8_t command);
 
 /**
- * Reads a CC1101 status register
- * statsu registers provide runtime information like PARTNUM, VERSION,  RSSSI.
- * TODO: dejar que el valor que se retorna sea un parametro de output y cambiar el retorno por un esp_err_t
+ * Reads a CC1101 status register into *output_value. Returns ESP_OK on success.
+ * Status registers provide runtime info like PARTNUM, VERSION, RSSI.
  */
-uint8_t zv_cc1101_read_status_register(uint8_t address);
+esp_err_t zv_cc1101_read_status_register(uint8_t address, uint8_t *output_value);
 
 /**
- * Reads configurations register, define the operating parametrs of the radio
- * such a frecuency, modulation, etc.
+ * Reads a configuration register into *output_value. Returns ESP_OK on success.
+ * Config registers define the operating parameters of the radio (frequency, modulation, etc.).
  */
-uint8_t zv_cc1101_read_config_register(uint8_t address);
+esp_err_t zv_cc1101_read_config_register(uint8_t address, uint8_t *output_value);
 
 /**
  * Writes a value to the configuration register
  */
 esp_err_t zv_cc1101_write_config_register(uint8_t address, uint8_t value);
 esp_err_t zv_cc1101_config_and_verify();
+esp_err_t zv_cc1101_wait_for_rx();
 
 uint8_t zv_cc1101_read_partnum(void);
 uint8_t zv_cc1101_read_version(void);
