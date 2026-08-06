@@ -6,8 +6,6 @@
 #include "driver/rmt_rx.h"
 #include "freertos/queue.h"
 #include "driver/gpio.h"
-#include "zv_signal_parser.h"
-#include <stdlib.h>
 
 #define CC1101_RMT_SYMBOL_COUNT 128
 #define FREQ_433_HZ     433920000
@@ -249,24 +247,22 @@ esp_err_t zv_cc1101_config_and_verify()
     return ESP_OK;
 }
 
-uint8_t zv_cc1101_read_partnum(void)
+esp_err_t zv_cc1101_read_partnum(uint8_t *output_value)
 {
-    uint8_t new_value;
-    esp_err_t result = zv_cc1101_read_status_register(CC1101_STATUS_PARTNUM, &new_value);
+    esp_err_t result = zv_cc1101_read_status_register(CC1101_STATUS_PARTNUM, output_value);
     if (result != ESP_OK)
-        return -1;
+        return result;
 
-    return new_value;
+    return ESP_OK;
 }
 
-uint8_t zv_cc1101_read_version(void)
+esp_err_t zv_cc1101_read_version(uint8_t *output_value)
 {
-    uint8_t new_value;
-    esp_err_t result = zv_cc1101_read_status_register(CC1101_STATUS_VERSION, &new_value);
+    esp_err_t result = zv_cc1101_read_status_register(CC1101_STATUS_VERSION, output_value);
     if (result != ESP_OK)
-        return -1;
+        return result;
 
-    return new_value;
+    return ESP_OK;
 }
 
 esp_err_t zv_cc1101_get_rssi_dbm(int8_t *rssi_dbm)
@@ -336,6 +332,12 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
     if (result != ESP_OK) 
     {
         ESP_LOGE(TAG, "rmt receive");
+
+        zv_cc1101_rmt_rx_cleanup();
+        esp_err_t listen_reset = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
+        if (listen_reset != ESP_OK)
+            return listen_reset;
+
         return result;
     }
 
@@ -374,4 +376,10 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
         return res;
 
     return ESP_OK;
+}
+
+void zv_cc1101_deinit(void)
+{
+    zv_cc1101_rmt_rx_cleanup();
+    cc_device_handle = NULL;
 }

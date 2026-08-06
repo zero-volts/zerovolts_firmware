@@ -46,6 +46,12 @@ static esp_err_t spi_attach_device(void)
 
 esp_err_t zv_subghz_init(void)
 {
+    if (device_handle != NULL)
+    {
+        ESP_LOGW(TAG, "Wait, subghz already initialized! resetting everything");
+        zv_subghz_deinit();
+    }
+
     zv_manual_reset();
 
     // SPI bus + device. From spi_attach_device() on, the driver owns CS.
@@ -55,18 +61,22 @@ esp_err_t zv_subghz_init(void)
         ESP_LOGE(TAG, "Can't initialize SPI bus, error: %d", res);
         return res;
     }
-        
+
     res = spi_attach_device();
     if (res != ESP_OK)
     {
         ESP_LOGE(TAG, "Can't attache the device to the bus, error: %d", res);
+
+        zv_subghz_deinit();
         return res;
     }
-        
+
     res = zv_cc1101_init(device_handle);
     if (res != ESP_OK)
     {
         ESP_LOGE(TAG, "Can't initialize the CC1101 logic, error: %d", res);
+
+        zv_subghz_deinit();
         return res;
     }
 
@@ -75,31 +85,53 @@ esp_err_t zv_subghz_init(void)
     if (res != ESP_OK)
     {
         ESP_LOGE(TAG, "Can't reset the module to start a clean work: %d", res);
+
+        zv_subghz_deinit();
         return res;
     }
 
     // Without this wait, the first register reads could back as garbage.
     esp_rom_delay_us(1000);
 
-    uint8_t partnum = zv_cc1101_read_partnum();
-    uint8_t version = zv_cc1101_read_version();
+    uint8_t partnum = 0;
+    uint8_t version = 0;
+    esp_err_t check_result = zv_cc1101_read_partnum(&partnum);
+    if (check_result != ESP_OK)
+    {
+        zv_subghz_deinit();
+        return check_result;
+    }
+
+    check_result = zv_cc1101_read_version(&version);
+    if (check_result != ESP_OK)
+    {
+        zv_subghz_deinit();
+        return check_result; 
+    }
+
     ESP_LOGI(TAG, "version: 0x%02X - parnum: 0x%02X\n", version, partnum);
 
     // PARTNUM is always 0x00 from the factory; VERSION is 0x14 (or 0x04 on old chip).
     // Anything else means the chip is not responding / SPI is wrong.
     if (partnum != 0x00 || (version != 0x14 && version != 0x04))
+    {
+        zv_subghz_deinit();
         return ESP_ERR_NOT_FOUND;
-
+    }
+        
     res = zv_cc1101_config_and_verify();
     if (res != ESP_OK)
     {
         ESP_LOGE(TAG, "Can't configure the default state of the CC1101 module: %d", res);
+
+        zv_subghz_deinit();
         return res;
     }
     
     res = zv_cc1101_send_strobe(CC1101_STROBE_SRX);
     if (res != ESP_OK)
     {
+        zv_subghz_deinit();
         return res;
     }
 
@@ -107,6 +139,8 @@ esp_err_t zv_subghz_init(void)
     if (res != ESP_OK)
     {
         ESP_LOGE(TAG, "Error listening the current state of the CC1101 module: %d", res);
+
+        zv_subghz_deinit();
         return res;
     }
     
@@ -122,6 +156,8 @@ esp_err_t zv_subghz_get_rssi_dbm(int8_t *rssi_dbm)
 
 void zv_subghz_deinit(void)
 {
+    zv_cc1101_deinit();
+
     if (device_handle != NULL)
     {
         zv_spi_bus_remove_device(device_handle);
