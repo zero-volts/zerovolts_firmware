@@ -5,7 +5,6 @@
 #include "esp_check.h"
 #include "driver/rmt_rx.h"
 #include "freertos/queue.h"
-#include "driver/gpio.h"
 
 #define CC1101_RMT_SYMBOL_COUNT 128
 #define FREQ_433_HZ     433920000
@@ -24,17 +23,22 @@ typedef struct {
     uint8_t value;
 } cc1101_register_config_t;
 
+/*
+ * This setup turns the CC1101 into a simple 433.92 MHz OOK receiver.
+ * We deliberately bypass its packet decoder: GDO0 carries the raw
+ * demodulated HIGH/LOW signal, and the ESP32 measures the pulse lengths.
+ */
 static const cc1101_register_config_t cc1101_base_config[] = {
-    { "IOCFG2",   0x00, 0x0E },
-    { "IOCFG0",   0x02, 0x0D }, // data output
+    { "IOCFG2",   0x00, 0x0E }, // GDO2 reports carrier sense (not currently used)
+    { "IOCFG0",   0x02, 0x0D }, // GDO0 outputs the raw demodulated data
     { "FIFOTHR",  0x03, 0x47 },
-    { "PKTCTRL0", 0x08, 0x32 },
-    { "FREQ2",    0x0D, 0x10 }, // carry frecuency default 433.92
-    { "FREQ1",    0x0E, 0xB0 }, // mid frecuency
-    { "FREQ0",    0x0F, 0x71 }, // low frecuency
-    { "MDMCFG4",  0x10, 0x67 }, // 0x10, 0xF7 RXBW = 58 Khz - 0x10, 0x67 }, /* ~270 kHz */
+    { "PKTCTRL0", 0x08, 0x32 }, // asynchronous serial mode; no packet framing
+    { "FREQ2",    0x0D, 0x10 }, // the three FREQ registers tune the radio to 433.92 MHz
+    { "FREQ1",    0x0E, 0xB0 },
+    { "FREQ0",    0x0F, 0x71 },
+    { "MDMCFG4",  0x10, 0x67 }, // receiver bandwidth is about 270 kHz
     { "MDMCFG3",  0x11, 0x83 },
-    { "MDMCFG2",  0x12, 0x30 }, // protocol tu use default is OOK
+    { "MDMCFG2",  0x12, 0x30 }, // ASK/OOK modulation, with sync-word detection disabled
     { "MCSM0",    0x18, 0x18 },
     { "FOCCFG",   0x19, 0x16 },
     { "AGCCTRL2", 0x1B, 0x03 },
@@ -53,15 +57,16 @@ static int32_t sing_by_level (uint16_t level, uint16_t duration)
 
 static esp_err_t zv_cc1101_start_rx(void)
 {
+    // SIDLE stops the current radio operation
     esp_err_t result = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
     if (result != ESP_OK)
         return result;
 
-    result = zv_cc1101_send_strobe(CC1101_STROBE_SFRX);
+    result = zv_cc1101_send_strobe(CC1101_STROBE_SFRX); // SFRX clears stale RX data
     if (result != ESP_OK)
         return result;
 
-    result = zv_cc1101_send_strobe(CC1101_STROBE_SRX);
+    result = zv_cc1101_send_strobe(CC1101_STROBE_SRX); // SRX starts reception
     if (result != ESP_OK)
         return result;
 
@@ -76,16 +81,22 @@ static esp_err_t zv_cc1101_read_register(uint8_t address, uint8_t burst, uint8_t
     if (cc_device_handle == NULL)
         return ESP_ERR_INVALID_STATE;
 
-    // All transactions on the SPI interface start with a header byte containing a R/W bit, a burst
-    // access bit (B), and a 6-bit address (A5 – A0).
-    // 1st bit = read/write
-    // 2nd bit = burst
-    // 3rd/7th = addresses to read/write
-
-    // CC1101_STATUS_PARTNUM/0x30   = 0 0 1 1 0 0 0 0
-    // CC1101_READ_BURST/0xC0       = 1 1 0 0 0 0 0 0
-    //                             ------------------ OR
-    // PARTNUM byte buffer          = 1 1 1 1 0 0 0 0
+    /*
+     * A CC1101 SPI header contains the read/write bit, the burst bit, and
+     * a 6-bit register address. Status registers are a small oddity: even
+     * when reading one byte, the datasheet requires the READ_BURST bit.
+     *
+     * For example, reading the PARTNUM status register builds the header
+     * byte by combining its address with the read and burst bits:
+     *
+     *   PARTNUM address (0x30)  = 0011 0000
+     *   READ_BURST flag (0xC0)  = 1100 0000
+     *                            --------- OR
+     *   SPI header byte         = 1111 0000 (0xF0)
+     *
+     * The first byte sent is this header. The second byte is only padding;
+     * its clock pulses let the CC1101 shift the register value back to us.
+     */
 
     uint8_t rx[2] = { 0 };
     // tx[0]: header (read + burst); tx[1]: 0x00 padding so the chip can clock out the value into rx[1]
@@ -137,21 +148,6 @@ static esp_err_t zv_cc1101_rmt_rx_setup()
     sr_rx_queue = xQueueCreate(2, sizeof(rmt_rx_done_event_data_t));
     if (sr_rx_queue == NULL)
         return ESP_ERR_NO_MEM;
-
-    gpio_config_t carrier_cfg = {
-        .pin_bit_mask = (1ULL << ZV_SUB_GHZ_PIN_GDO2),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-
-    esp_err_t err = gpio_config(&carrier_cfg);
-    if (err != ESP_OK)
-    {
-        zv_cc1101_rmt_rx_cleanup();
-        return err;
-    }
     
     rmt_rx_channel_config_t cfg = {
         .clk_src           = RMT_CLK_SRC_DEFAULT,
@@ -162,7 +158,7 @@ static esp_err_t zv_cc1101_rmt_rx_setup()
         .flags.with_dma    = false,
     };
 
-    err = rmt_new_rx_channel(&cfg, &s_rx_chan_handle);
+    esp_err_t err  = rmt_new_rx_channel(&cfg, &s_rx_chan_handle);
     if (err != ESP_OK)
     {
         zv_cc1101_rmt_rx_cleanup();
@@ -275,6 +271,11 @@ esp_err_t zv_cc1101_get_rssi_dbm(int8_t *rssi_dbm)
     if (res != ESP_OK)
         return res;
 
+    /*
+     * RSSI is stored as an 8-bit two's-complement number. The CC1101
+     * formula is RSSI_dBm = RSSI_dec / 2 - RSSI_offset. Around 433 MHz,
+     * 74 dB is the recommended offset.
+     */
     int8_t r = (int8_t)((raw >= 128) ? (int)raw - 256 : raw);
 
     *rssi_dbm = (r / 2) - 74;   /* offset = 74 dBm para 433 MHz */
@@ -310,6 +311,46 @@ esp_err_t zv_cc1101_wait_for_rx()
     return ESP_ERR_TIMEOUT;
 }
 
+/**
+ *  Data flow from a CC1101 capture -> RMT -> pulses:
+ *
+ *  RF signal
+ *      |
+ *      |---> CC1101 demodulates OOK and outputs the digital levels via GDO0 pin
+ *            |
+ *            |----> RMT RX measures the duration of each logic level (resolution: 1 us)
+ *                  |
+ *                  |---> rmt_rx_done_cb() copies the event to sr_rx_queue from the ISR
+ *                       |
+ *                       |---> This task receives the event and converts each RMT symbol:
+ *                          |-------> high level    -> positive duration
+ *                          |-------> low level     -> negative duration
+ *                          |
+ *                          |-----> out->durations_us[] contains the final sequence of pulses
+ *
+ * ======================================================================================================
+ *
+ *  Call sequence:
+ *
+ *    zv_cc1101_rmt_rx_setup()
+ *     |- create sr_rx_queue
+ *     |- configures GDO0 as the input for the RMT RX channel
+ *     |- registers rmt_rx_done_cb()
+ *     |- enables the RMT channel
+ *
+ *   xQueueReset()
+ *     -> Exclude pending events from a previous capture
+ *
+ *   zv_cc1101_start_rx()
+ *     -> SIDLE -> SFRX -> SRX
+ *
+ *   rmt_receive()
+ *     -> Create an array `rx_symbols[]` to store the durations
+ *
+ *   xQueueReceive(timeout_ms)
+ *     |- received event -> converts duration0/duration1 and ends in SIDLE
+ *     `- timeout        -> stops RX, restarts RMT, and returns ESP_ERR_TIMEOUT
+ */
 esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
 {
     if (out == NULL)
@@ -323,6 +364,11 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
     ESP_RETURN_ON_ERROR(zv_cc1101_start_rx(), TAG, "Problems starting module in RX");
 
     rmt_receive_config_t rxc = {
+        /*
+         * Pulses shorter than 1 us are treated as glitches. A level that
+         * lasts 15 ms ends the current reception, which gives us a natural
+         * gap between many common remote-control frames.
+         */
         .signal_range_min_ns = 1000,
         .signal_range_max_ns = 15 * 1000 * 1000,
     };
@@ -331,17 +377,23 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
     esp_err_t result = rmt_receive(s_rx_chan_handle, rx_symbols, sizeof(rx_symbols), &rxc);
     if (result != ESP_OK) 
     {
-        ESP_LOGE(TAG, "rmt receive");
+        ESP_LOGE(TAG, "RMT could not start capturing pulses from CC1101 GDO0: %s",
+                 esp_err_to_name(result));
 
         zv_cc1101_rmt_rx_cleanup();
-        esp_err_t listen_reset = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
-        if (listen_reset != ESP_OK)
-            return listen_reset;
+        esp_err_t cleanup_result = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
+        if (cleanup_result != ESP_OK)
+        {
+            ESP_LOGE(TAG, "CC1101 could not return to IDLE after the RMT failure: %s",
+                     esp_err_to_name(cleanup_result));
+        }
 
         return result;
     }
 
     rmt_rx_done_event_data_t evt;
+    // Block the calling task until the RMT callback places a completed
+    // reception event in the queue, or until timeout_ms expires.
     if (xQueueReceive(sr_rx_queue, &evt, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
     {
         esp_err_t first_error = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
@@ -361,6 +413,10 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
     }
 
     out->freq_hz = FREQ_433_HZ;
+    // One RMT symbol holds two consecutive logic levels. Store both as signed pulse lengths:
+    //  - positive means HIGH and negative means LOW.
+    // This keeps the waveform ordering without needing a separate level array.
+
     for (size_t i = 0; i < evt.num_symbols && out->count < CC1101_CAPTURE_MAX_DURATIONS; i++)
     {
         rmt_symbol_word_t s = evt.received_symbols[i];

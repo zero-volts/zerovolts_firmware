@@ -17,6 +17,9 @@
 
 static const char *TAG = "ZEROVOLTS_FIRMWARE";
 
+// Simple temporary heuristic: reject very short captures and captures
+// dominated by pulses shorter than 150 us. These limits are empirical,
+// not part of the CC1101 protocol.
 static bool capture_looks_like_noise(
     const zv_cc1101_capture_t *cap)
 {
@@ -39,8 +42,10 @@ static bool capture_looks_like_noise(
     return very_short > (cap->count / 3);
 }
 
+// TODO: This loop is for testing purposes only and should be removed once the UART command to call subghz is implemented.
 static void subghz_listener_task(void *arg)
 {
+
     zv_cc1101_capture_t cap;
     while (true)
     {
@@ -49,11 +54,12 @@ static void subghz_listener_task(void *arg)
         {
             if (capture_looks_like_noise(&cap))
             {
-                ESP_LOGD(TAG, "Captura descartada como ruido: %u flancos",cap.count);
+                ESP_LOGD(TAG, "Discarding noisy Sub-GHz capture: %u pulse durations", cap.count);
                 continue;
             }
 
-            ESP_LOGI(TAG, "Señal candidata: %u flancos en %lu Hz", cap.count, (unsigned long)cap.freq_hz);
+            ESP_LOGI(TAG, "Sub-GHz signal captured: %u pulse durations at %lu Hz",
+                     cap.count, (unsigned long)cap.freq_hz);
             for (uint16_t i = 0; i < cap.count; i++)
             {
                 printf("%+" PRId32 " ",cap.durations_us[i]);
@@ -63,14 +69,14 @@ static void subghz_listener_task(void *arg)
         }
         else if (result == ESP_ERR_TIMEOUT)
         {
-            ESP_LOGD(TAG, "Sin señal; reiniciando escucha");
+            ESP_LOGD(TAG, "Sub-GHz capture timed out: no complete signal was received");
         }
         else
         {
             if (result != ESP_OK)
-                ESP_LOGE(TAG, "Error capturando: %s", esp_err_to_name(result));
+                ESP_LOGE(TAG, "Sub-GHz capture failed: %s", esp_err_to_name(result));
             else
-                ESP_LOGD(TAG, "Carrier vacio, nada que escuchar");
+                ESP_LOGD(TAG, "Sub-GHz capture completed without any pulse data");
 
             vTaskDelay(pdMS_TO_TICKS(100));
         }
@@ -110,9 +116,11 @@ void app_main(void)
     if (zv_uart_is_ready())
         zv_uart_send_line("READY");
 
-    if (zv_subghz_init() == ESP_OK)
+    esp_err_t subghz_result = zv_subghz_init();
+    if (subghz_result == ESP_OK)
     {
-        ESP_LOGI(TAG, "CC1101 READY");
+        // TODO: Remove this task once the UART commands to call subghz have been created
+        ESP_LOGI(TAG, "CC1101 initialized and ready to receive Sub-GHz signals");
         BaseType_t task_created = xTaskCreate(
             subghz_listener_task,
             "subghz_listener",
@@ -123,11 +131,12 @@ void app_main(void)
         );
 
         if (task_created != pdPASS)
-            ESP_LOGE(TAG, "No se pudo crear la tarea Sub-GHz");
+            ESP_LOGE(TAG, "CC1101 is ready, but the Sub-GHz listener task could not be created");
     }
     else
     {
-        ESP_LOGE(TAG, "CC1101 NOT_FOUND — revisar cableado SPI");
+        ESP_LOGE(TAG, "CC1101 initialization failed: %s. Check the SPI wiring and radio power",
+                 esp_err_to_name(subghz_result));
     }
 
     while (1) {
