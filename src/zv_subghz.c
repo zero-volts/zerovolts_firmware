@@ -1,13 +1,16 @@
 // https://docs.espressif.com/projects/esp-idf/en/v4.2/esp32s2/api-reference/peripherals/spi_master.html#_CPPv416spi_bus_config_t
 // https://www.coralradio.com/cc1101-433mhz-module-guide.html
 // https://gist.github.com/Taylor-eOS/0882416612accbeee27b064519ef4d35
-#include "subghz.h"
-#include "cc1101.h"
+#include "zv_subghz.h"
+#include "zv_cc1101.h"
 #include "zv_spi_bus.h"
 
 #include "driver/spi_master.h"
 #include "driver/gpio.h"   // gpio_config(), gpio_set_level()
 #include "esp_rom_sys.h"   // esp_rom_delay_us()
+#include "esp_log.h"
+
+static const char *TAG = "ZV_SUBGHZ";
 
 static spi_device_handle_t device_handle = NULL;
 
@@ -48,23 +51,39 @@ esp_err_t zv_subghz_init(void)
     // SPI bus + device. From spi_attach_device() on, the driver owns CS.
     esp_err_t res = zv_spi_bus_init();
     if (res != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Can't initialize SPI bus, error: %d", res);
         return res;
-
+    }
+        
     res = spi_attach_device();
     if (res != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Can't attache the device to the bus, error: %d", res);
         return res;
-
-    zv_cc1101_init(device_handle);
+    }
+        
+    res = zv_cc1101_init(device_handle);
+    if (res != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Can't initialize the CC1101 logic, error: %d", res);
+        return res;
+    }
 
     // Software reset (SRES strobe). The byte goes through tx_buffer
-    zv_cc1101_send_strobe(CC1101_STROBE_SRES);
+    res = zv_cc1101_send_strobe(CC1101_STROBE_SRES);
+    if (res != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Can't reset the module to start a clean work: %d", res);
+        return res;
+    }
 
     // Without this wait, the first register reads could back as garbage.
     esp_rom_delay_us(1000);
 
     uint8_t partnum = zv_cc1101_read_partnum();
     uint8_t version = zv_cc1101_read_version();
-    printf("version: 0x%02X - parnum: 0x%02X\n", version, partnum);
+    ESP_LOGI(TAG, "version: 0x%02X - parnum: 0x%02X\n", version, partnum);
 
     // PARTNUM is always 0x00 from the factory; VERSION is 0x14 (or 0x04 on old chip).
     // Anything else means the chip is not responding / SPI is wrong.
@@ -73,21 +92,32 @@ esp_err_t zv_subghz_init(void)
 
     res = zv_cc1101_config_and_verify();
     if (res != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Can't configure the default state of the CC1101 module: %d", res);
         return res;
+    }
+    
+    res = zv_cc1101_send_strobe(CC1101_STROBE_SRX);
+    if (res != ESP_OK)
+    {
+        return res;
+    }
 
-    zv_cc1101_send_strobe(CC1101_STROBE_SRX);
-    zv_cc1101_wait_for_rx();
-
+    res = zv_cc1101_wait_for_rx();
+    if (res != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error listening the current state of the CC1101 module: %d", res);
+        return res;
+    }
+    
     esp_rom_delay_us(3000);
-    int8_t rssi = zv_cc1101_get_rssi_dbm();
-    printf("rssi: %d\n", rssi);
 
     return ESP_OK;
 }
 
-int8_t zv_subghz_get_rssi_dbm(void)
+esp_err_t zv_subghz_get_rssi_dbm(int8_t *rssi_dbm)
 {
-    return zv_cc1101_get_rssi_dbm();
+    return zv_cc1101_get_rssi_dbm(rssi_dbm);
 }
 
 void zv_subghz_deinit(void)

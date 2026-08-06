@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include "driver/spi_master.h"
 
+#define CC1101_CAPTURE_MAX_DURATIONS 256
+
 /* SPI configuration */
 #define CC1101_SPI_CLOCK_HZ             (4 * 1000 * 1000) // 4 MHz
 
@@ -25,6 +27,16 @@
 
 /* MARCSTATE values */
 #define CC1101_MARCSTATE_RX             0x0D
+
+#define ZV_SUB_GHZ_PIN_GDO0     27
+#define ZV_SUB_GHZ_PIN_GDO2     26
+
+typedef struct {
+
+    int32_t durations_us[CC1101_CAPTURE_MAX_DURATIONS];
+    uint16_t count;
+    uint32_t freq_hz;
+} zv_cc1101_capture_t;
 
 esp_err_t zv_cc1101_init(spi_device_handle_t handle);
 
@@ -55,6 +67,8 @@ esp_err_t zv_cc1101_wait_for_rx();
 
 uint8_t zv_cc1101_read_partnum(void);
 uint8_t zv_cc1101_read_version(void);
-int8_t zv_cc1101_get_rssi_dbm(void);
+esp_err_t zv_cc1101_get_rssi_dbm(int8_t *rssi_dbm);
+
+esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms);
 
 #endif /* ZV_CC1101_H */
