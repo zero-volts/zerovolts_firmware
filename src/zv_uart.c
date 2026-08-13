@@ -5,6 +5,8 @@
 #include "zv_bt_gattc.h"
 #include "zv_uart_commands.h"
 
+#include "zv_subghz.h"
+
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h> 
@@ -28,6 +30,7 @@ static void handle_test(char *options);
 static void handle_bt_scan(char *options);
 static void handle_bt_connection(char *options);
 static void handle_bt_disconnect(char *options);
+static void handle_subghz_capture(char *options);
 
 typedef void (*command_handler_t)(char *options);
 typedef struct {
@@ -40,6 +43,7 @@ static const command_entry_t commands[] = {
     { BT_COMMAND_REQ_SCAN, handle_bt_scan },
     { BT_COMMAND_REQ_CONNECT, handle_bt_connection },
     { BT_COMMAND_REQ_DISCONNECT, handle_bt_disconnect },
+    { SUBGHZ_COMMAND_REQ_CAPTURE, handle_subghz_capture },
 };
 
 static void handle_test(char *options)
@@ -56,7 +60,8 @@ static void handle_bt_scan(char *options)
 
 static void handle_bt_connection(char *options)
 {
-     if (options == NULL) {
+    if (options == NULL)
+    {
         zv_uart_send_line(BT_COMMAND_RES_CONNECT_ERROR);
         return;
     }
@@ -88,6 +93,23 @@ static void handle_bt_disconnect(char *options)
 {
     (void)options;
     zv_bt_gatt_close_connection();
+}
+
+static void handle_subghz_capture(char *options)
+{
+    if (options == NULL)
+    {
+        zv_uart_send_line(SUBGHZ_COMMAND_RES_CAPTURE_ERROR);
+        return;
+    }
+
+    ESP_LOGI(TAG, "handle_subghz_capture %s", options);
+
+    //TODO: pasar la frecuencia y el tiempo de espera a la funcion por ahora estan hardcodeados.
+    BaseType_t task_created = xTaskCreate(subghz_listener_task, "subghz_listener", 4096, NULL, 5, NULL );
+
+    if (task_created != pdPASS)
+        ESP_LOGE(TAG, "CC1101 is ready, but the Sub-GHz listener task could not be created");
 }
 
 void zv_uart_init(void)
@@ -187,8 +209,11 @@ void zv_uart_parse_commands(void)
 
     for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
     {
+       // ESP_LOGI(TAG, "iterando fuera: %s", cmd);
+       // ESP_LOGI(TAG, "iterando fuera actual comando: %s", commands[i].cmd);
         if (strcmp(cmd, commands[i].cmd) == 0) 
         {
+            // ESP_LOGI(TAG, "%s", cmd);
             commands[i].handler(args);
             line_len = 0;
             return;

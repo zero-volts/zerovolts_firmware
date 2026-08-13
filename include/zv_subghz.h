@@ -22,5 +22,6 @@ void zv_subghz_deinit(void);
 
 // Reads the current RSSI in dBm. Valid once the chip is in RX (después de init).
 esp_err_t zv_subghz_get_rssi_dbm(int8_t *rssi_dbm);
+void subghz_listener_task(void *arg);
 
 #endif /* ZV_SUB_GHZ_H */

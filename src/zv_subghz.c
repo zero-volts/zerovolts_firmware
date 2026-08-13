@@ -2,13 +2,25 @@
 // https://www.coralradio.com/cc1101-433mhz-module-guide.html
 // https://gist.github.com/Taylor-eOS/0882416612accbeee27b064519ef4d35
 #include "zv_subghz.h"
+
+#include "esp_log.h"
+#include "esp_rom_sys.h"   // esp_rom_delay_us()
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/gpio.h"   // gpio_config(), gpio_set_level()
+#include "driver/spi_master.h"
+
 #include "zv_cc1101.h"
 #include "zv_spi_bus.h"
+#include "zv_uart.h"
+#include "zv_uart_commands.h"
 
-#include "driver/spi_master.h"
-#include "driver/gpio.h"   // gpio_config(), gpio_set_level()
-#include "esp_rom_sys.h"   // esp_rom_delay_us()
-#include "esp_log.h"
+#include <inttypes.h>
+#include <stdio.h>
+
+#define DATA_CHUNK_MAX_VALUES 32
+#define DATA_CHUNK_LINE_SIZE  512
 
 static const char *TAG = "ZV_SUBGHZ";
 
@@ -160,6 +172,138 @@ esp_err_t zv_subghz_init(void)
 esp_err_t zv_subghz_get_rssi_dbm(int8_t *rssi_dbm)
 {
     return zv_cc1101_get_rssi_dbm(rssi_dbm);
+}
+
+static bool capture_looks_like_noise(const zv_cc1101_capture_t *cap)
+{
+    if (cap->count < 20)
+        return true;
+
+    uint16_t very_short = 0;
+    for (uint16_t i = 0; i < cap->count; i++)
+    {
+        int32_t duration = cap->durations_us[i];
+
+        if (duration < 0)
+            duration = -duration;
+
+        if (duration < 150)
+            very_short++;
+    }
+
+    return very_short > (cap->count / 3);
+}
+
+/**
+ * Convert the pulses sending line by line as a chunks
+ * example:
+ *  SUBGHZ_CAPTURE:DATA|seq=0|chunks=8|count=32|timings=-10375,+254,...
+ */
+static bool send_capture_chunks(const zv_cc1101_capture_t *cap)
+{
+    if (cap == NULL || cap->count == 0)
+        return false;
+
+    const uint16_t chunks_amount = (cap->count + DATA_CHUNK_MAX_VALUES - 1) / DATA_CHUNK_MAX_VALUES;
+    for (uint16_t seq = 0; seq < chunks_amount; seq++)
+    {
+        const uint16_t start = seq * DATA_CHUNK_MAX_VALUES;
+        uint16_t end = start + DATA_CHUNK_MAX_VALUES;
+        if (end > cap->count)
+            end = cap->count;
+
+        const uint16_t values_in_chunk = end - start;
+        char line[DATA_CHUNK_LINE_SIZE];
+
+        int written = snprintf(line, sizeof(line),
+                               "%s|seq=%u|chunks=%u|count=%u|timings=",
+                               SUBGHZ_COMMAND_RES_CAPTURE_DATA,
+                               seq, chunks_amount, values_in_chunk);
+
+        if (written < 0 || (size_t)written >= sizeof(line))
+            return false;
+
+        size_t offset = (size_t)written;
+        for (uint16_t index = start; index < end; index++)
+        {
+            const char *separator = (index == start) ? "" : ",";
+
+            written = snprintf(line + offset, sizeof(line) - offset,
+                               "%s%+" PRId32,
+                               separator, cap->durations_us[index]);
+
+            if (written < 0 || (size_t)written >= sizeof(line) - offset)
+                return false;
+
+            offset += (size_t)written;
+        }
+
+        zv_uart_send_line(line);
+    }
+
+    return true;
+}
+
+void subghz_listener_task(void *arg)
+{
+    (void)arg;
+    zv_cc1101_capture_t cap = { 0 };
+    const TickType_t capture_window = pdMS_TO_TICKS(30000);
+    const TickType_t started_at = xTaskGetTickCount();
+
+    ESP_LOGI(TAG, "Waiting up to 30 seconds for a valid Sub-GHz signal...");
+    zv_uart_send_line(SUBGHZ_COMMAND_RES_CAPTURE_START);
+    while ((xTaskGetTickCount() - started_at) < capture_window)
+    {
+        TickType_t elapsed = xTaskGetTickCount() - started_at;
+        TickType_t remaining = capture_window - elapsed;
+        uint32_t remaining_ms = pdTICKS_TO_MS(remaining);
+        if (remaining_ms == 0)
+            remaining_ms = 1;
+
+        cap.count = 0;
+        esp_err_t result = zv_cc1101_capture(&cap, remaining_ms);
+
+        if (result == ESP_ERR_TIMEOUT)
+            break;
+
+        if (result != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Sub-GHz capture failed: %s", esp_err_to_name(result));
+            zv_uart_send_formatted_line("%s|reason=%s", SUBGHZ_COMMAND_RES_CAPTURE_FAIL, esp_err_to_name(result));
+            vTaskDelete(NULL);
+            return;
+        }
+
+        if (cap.count == 0 || capture_looks_like_noise(&cap))
+        {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        ESP_LOGI(TAG, "Sub-GHz signal captured: %u pulse durations at %lu Hz", cap.count, (unsigned long)cap.freq_hz);
+        if (!send_capture_chunks(&cap))
+        {
+            ESP_LOGE(TAG, "Sub-GHz capture could not be serialized into UART chunks");
+            zv_uart_send_formatted_line("%s|reason=serialization", SUBGHZ_COMMAND_RES_CAPTURE_FAIL);
+            vTaskDelete(NULL);
+            return;
+        }
+
+        const uint16_t chunks_amount = (cap.count + DATA_CHUNK_MAX_VALUES - 1) / DATA_CHUNK_MAX_VALUES;
+        zv_uart_send_formatted_line("%s|freq=%lu|count=%u|chunks=%u|buffer_full=%u",
+                                    SUBGHZ_COMMAND_RES_CAPTURE_DONE,
+                                    (unsigned long)cap.freq_hz,
+                                    cap.count,
+                                    chunks_amount,
+                                    cap.count == CC1101_CAPTURE_MAX_DURATIONS);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Sub-GHz capture timed out: no valid signal was received");
+    zv_uart_send_formatted_line("%s|reason=timeout", SUBGHZ_COMMAND_RES_CAPTURE_FAIL);
+    vTaskDelete(NULL);
 }
 
 void zv_subghz_deinit(void)
