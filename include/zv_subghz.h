@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "esp_err.h"
+#include "zv_uart.h"
 
 // CC1101 ---------- ESP32
 //

@@ -4,6 +4,7 @@
 #include "zv_bt_gap.h"
 #include "zv_bt_gattc.h"
 #include "zv_uart_commands.h"
+#include "parser.h"
 
 #include "zv_subghz.h"
 
@@ -22,6 +23,7 @@
 #define ZV_UART_TX   GPIO_NUM_17
 #define ZV_UART_RX   GPIO_NUM_16
 #define ZV_UART_BUF_SIZE 256
+#define CAPTURE_FIELD_BUFFER_SIZE 20
 
 static const char *TAG = "ZV_UART";
 static bool uart_ready = false;
@@ -105,11 +107,34 @@ static void handle_subghz_capture(char *options)
 
     ESP_LOGI(TAG, "handle_subghz_capture %s", options);
 
-    //TODO: pasar la frecuencia y el tiempo de espera a la funcion por ahora estan hardcodeados.
-    BaseType_t task_created = xTaskCreate(subghz_listener_task, "subghz_listener", 4096, NULL, 5, NULL );
+    char *signal_str = strtok(options, "|");
 
+    ESP_LOGE(TAG, "signal_str: %s", signal_str);
+
+    char buffer_temp[CAPTURE_FIELD_BUFFER_SIZE] = {0};
+    get_field_value(signal_str, "freq_hz", buffer_temp, CAPTURE_FIELD_BUFFER_SIZE);
+
+    char buffer_timeframe[CAPTURE_FIELD_BUFFER_SIZE] = {0};
+    char *time_frame_str = strtok(NULL, "|");
+    get_field_value(time_frame_str, "timeout_ms", buffer_timeframe, CAPTURE_FIELD_BUFFER_SIZE);
+
+    capture_task_data_t *data = pvPortMalloc(sizeof(*data));
+    if (data == NULL)
+    {
+        zv_uart_send_formatted_line("%s|reason=no_memory", SUBGHZ_COMMAND_RES_CAPTURE_ERROR);
+        return;
+    }
+
+    data->signal = strtoul(buffer_temp, NULL, 10);
+    data->time_frame = strtoul(buffer_timeframe, NULL, 10);
+
+    BaseType_t task_created = xTaskCreate(subghz_listener_task, "subghz_listener", 4096, data, 5, NULL );
     if (task_created != pdPASS)
+    {
+        vPortFree(data);
         ESP_LOGE(TAG, "CC1101 is ready, but the Sub-GHz listener task could not be created");
+        zv_uart_send_formatted_line("%s|reason=task_creation", SUBGHZ_COMMAND_RES_CAPTURE_ERROR);
+    }
 }
 
 void zv_uart_init(void)
@@ -209,8 +234,6 @@ void zv_uart_parse_commands(void)
 
     for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
     {
-       // ESP_LOGI(TAG, "iterando fuera: %s", cmd);
-       // ESP_LOGI(TAG, "iterando fuera actual comando: %s", commands[i].cmd);
         if (strcmp(cmd, commands[i].cmd) == 0) 
         {
             // ESP_LOGI(TAG, "%s", cmd);

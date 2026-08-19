@@ -7,6 +7,11 @@
 extern "C" {
 #endif
 
+typedef struct {
+    long signal;
+    int time_frame;
+} capture_task_data_t;
+
 void zv_uart_init(void);
 void zv_uart_send_line(const char *line);
 void zv_uart_send_formatted_line(const char *message, ...);

@@ -13,15 +13,19 @@
 
 static const char *TAG = "ZV_CC1101";
 
-static spi_device_handle_t cc_device_handle = NULL;
-static rmt_channel_handle_t s_rx_chan_handle = NULL;
-static QueueHandle_t sr_rx_queue = NULL;
-
+typedef struct {
+    spi_device_handle_t cc_device_handle;
+    rmt_channel_handle_t s_rx_chan_handle;
+    QueueHandle_t sr_rx_queue;
+    uint32_t frequency;
+} cc1101_states_ctx;
 typedef struct {
     const char *name;
     uint8_t address;
     uint8_t value;
 } cc1101_register_config_t;
+
+static cc1101_states_ctx context;
 
 /*
  * This setup turns the CC1101 into a simple 433.92 MHz OOK receiver.
@@ -78,7 +82,7 @@ static esp_err_t zv_cc1101_read_register(uint8_t address, uint8_t burst, uint8_t
     if (output_value == NULL)
         return ESP_ERR_INVALID_ARG;
 
-    if (cc_device_handle == NULL)
+    if (context.cc_device_handle == NULL)
         return ESP_ERR_INVALID_STATE;
 
     /*
@@ -108,7 +112,7 @@ static esp_err_t zv_cc1101_read_register(uint8_t address, uint8_t burst, uint8_t
         .rx_buffer = rx
     };
 
-    esp_err_t err = spi_device_polling_transmit(cc_device_handle, &transaction);
+    esp_err_t err = spi_device_polling_transmit(context.cc_device_handle, &transaction);
     if (err != ESP_OK)
         return err;
 
@@ -118,17 +122,17 @@ static esp_err_t zv_cc1101_read_register(uint8_t address, uint8_t burst, uint8_t
 
 static void zv_cc1101_rmt_rx_cleanup(void)
 {
-    if (s_rx_chan_handle != NULL)
+    if (context.s_rx_chan_handle != NULL)
     {
-        rmt_disable(s_rx_chan_handle);
-        rmt_del_channel(s_rx_chan_handle);
-        s_rx_chan_handle = NULL;
+        rmt_disable(context.s_rx_chan_handle);
+        rmt_del_channel(context.s_rx_chan_handle);
+        context.s_rx_chan_handle = NULL;
     }
 
-    if (sr_rx_queue != NULL)
+    if (context.sr_rx_queue != NULL)
     {
-        vQueueDelete(sr_rx_queue);
-        sr_rx_queue = NULL;
+        vQueueDelete(context.sr_rx_queue);
+        context.sr_rx_queue = NULL;
     }
 }
 
@@ -142,11 +146,11 @@ static bool IRAM_ATTR rmt_rx_done_cb(rmt_channel_handle_t channel, const rmt_rx_
 
 static esp_err_t zv_cc1101_rmt_rx_setup()
 {
-    if (s_rx_chan_handle)
+    if (context.s_rx_chan_handle)
         return ESP_OK;
 
-    sr_rx_queue = xQueueCreate(2, sizeof(rmt_rx_done_event_data_t));
-    if (sr_rx_queue == NULL)
+    context.sr_rx_queue = xQueueCreate(2, sizeof(rmt_rx_done_event_data_t));
+    if (context.sr_rx_queue == NULL)
         return ESP_ERR_NO_MEM;
     
     rmt_rx_channel_config_t cfg = {
@@ -158,7 +162,7 @@ static esp_err_t zv_cc1101_rmt_rx_setup()
         .flags.with_dma    = false,
     };
 
-    esp_err_t err  = rmt_new_rx_channel(&cfg, &s_rx_chan_handle);
+    esp_err_t err  = rmt_new_rx_channel(&cfg, &context.s_rx_chan_handle);
     if (err != ESP_OK)
     {
         zv_cc1101_rmt_rx_cleanup();
@@ -166,14 +170,14 @@ static esp_err_t zv_cc1101_rmt_rx_setup()
     }
 
     rmt_rx_event_callbacks_t cbs = { .on_recv_done = rmt_rx_done_cb };
-    err = rmt_rx_register_event_callbacks(s_rx_chan_handle, &cbs, sr_rx_queue);
+    err = rmt_rx_register_event_callbacks(context.s_rx_chan_handle, &cbs, context.sr_rx_queue);
     if (err != ESP_OK)
     {
         zv_cc1101_rmt_rx_cleanup();
         return err;
     }
 
-    err = rmt_enable(s_rx_chan_handle);
+    err = rmt_enable(context.s_rx_chan_handle);
     if (err != ESP_OK)
     {
         zv_cc1101_rmt_rx_cleanup();
@@ -185,7 +189,7 @@ static esp_err_t zv_cc1101_rmt_rx_setup()
 
 esp_err_t zv_cc1101_send_strobe(uint8_t command)
 {
-    if (cc_device_handle == NULL)
+    if (context.cc_device_handle == NULL)
         return ESP_ERR_INVALID_STATE;
 
     spi_transaction_t transaction = {
@@ -193,7 +197,7 @@ esp_err_t zv_cc1101_send_strobe(uint8_t command)
         .tx_buffer = &command
     };
 
-    return spi_device_polling_transmit(cc_device_handle, &transaction);
+    return spi_device_polling_transmit(context.cc_device_handle, &transaction);
 }
 
 esp_err_t zv_cc1101_read_status_register(uint8_t address, uint8_t *output_value)
@@ -208,7 +212,7 @@ esp_err_t zv_cc1101_read_config_register(uint8_t address, uint8_t *output_value)
 
 esp_err_t zv_cc1101_write_config_register(uint8_t address, uint8_t value)
 {
-    if (cc_device_handle == NULL)
+    if (context.cc_device_handle == NULL)
         return ESP_ERR_INVALID_STATE;
 
     uint8_t tx[2] = { address, value };
@@ -217,7 +221,7 @@ esp_err_t zv_cc1101_write_config_register(uint8_t address, uint8_t value)
         .tx_buffer = tx,
     };
 
-    return spi_device_polling_transmit(cc_device_handle, &transaction);
+    return spi_device_polling_transmit(context.cc_device_handle, &transaction);
 }
 
 esp_err_t zv_cc1101_config_and_verify()
@@ -287,7 +291,7 @@ esp_err_t zv_cc1101_init(spi_device_handle_t handle)
     if (handle == NULL)
         return ESP_ERR_INVALID_ARG;
 
-    cc_device_handle = handle;
+    context.cc_device_handle = handle;
     return ESP_OK;
 }
 
@@ -309,6 +313,11 @@ esp_err_t zv_cc1101_wait_for_rx()
     }
 
     return ESP_ERR_TIMEOUT;
+}
+
+void zv_cc1101_set_frequency(uint32_t frequency)
+{
+    context.frequency = frequency;
 }
 
 /**
@@ -359,7 +368,7 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
     ESP_RETURN_ON_ERROR(zv_cc1101_rmt_rx_setup(), TAG, "rmt install");
 
     out->count = 0;
-    xQueueReset(sr_rx_queue);
+    xQueueReset(context.sr_rx_queue);
 
     ESP_RETURN_ON_ERROR(zv_cc1101_start_rx(), TAG, "Problems starting module in RX");
 
@@ -374,7 +383,7 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
     };
 
     static rmt_symbol_word_t rx_symbols[CC1101_RMT_SYMBOL_COUNT];
-    esp_err_t result = rmt_receive(s_rx_chan_handle, rx_symbols, sizeof(rx_symbols), &rxc);
+    esp_err_t result = rmt_receive(context.s_rx_chan_handle, rx_symbols, sizeof(rx_symbols), &rxc);
     if (result != ESP_OK) 
     {
         ESP_LOGE(TAG, "RMT could not start capturing pulses from CC1101 GDO0: %s",
@@ -394,25 +403,25 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
     rmt_rx_done_event_data_t evt;
     // Block the calling task until the RMT callback places a completed
     // reception event in the queue, or until timeout_ms expires.
-    if (xQueueReceive(sr_rx_queue, &evt, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    if (xQueueReceive(context.sr_rx_queue, &evt, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
     {
         esp_err_t first_error = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
-        esp_err_t cleanup_error = rmt_disable(s_rx_chan_handle);
+        esp_err_t cleanup_error = rmt_disable(context.s_rx_chan_handle);
         if (first_error == ESP_OK)
             first_error = cleanup_error;
 
         if (first_error != ESP_OK)
             return first_error;
 
-        xQueueReset(sr_rx_queue);
-        esp_err_t res = rmt_enable(s_rx_chan_handle);
+        xQueueReset(context.sr_rx_queue);
+        esp_err_t res = rmt_enable(context.s_rx_chan_handle);
         if (res != ESP_OK)
             return res;
 
         return ESP_ERR_TIMEOUT;
     }
 
-    out->freq_hz = FREQ_433_HZ;
+    out->freq_hz = context.frequency > 0 ? context.frequency : FREQ_433_HZ;
     // One RMT symbol holds two consecutive logic levels. Store both as signed pulse lengths:
     //  - positive means HIGH and negative means LOW.
     // This keeps the waveform ordering without needing a separate level array.
@@ -437,5 +446,5 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
 void zv_cc1101_deinit(void)
 {
     zv_cc1101_rmt_rx_cleanup();
-    cc_device_handle = NULL;
+    context.cc_device_handle = NULL;
 }

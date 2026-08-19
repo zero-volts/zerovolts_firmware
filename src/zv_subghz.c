@@ -13,7 +13,6 @@
 
 #include "zv_cc1101.h"
 #include "zv_spi_bus.h"
-#include "zv_uart.h"
 #include "zv_uart_commands.h"
 
 #include <inttypes.h>
@@ -246,13 +245,25 @@ static bool send_capture_chunks(const zv_cc1101_capture_t *cap)
 
 void subghz_listener_task(void *arg)
 {
-    (void)arg;
+    capture_task_data_t *task_data = (capture_task_data_t *)arg;
+    if (task_data == NULL)
+    {
+        vTaskDelete(NULL);
+        return;
+    }
+
+    capture_task_data_t data = *task_data;
+    vPortFree(task_data);
+    task_data = NULL;
+
     zv_cc1101_capture_t cap = { 0 };
-    const TickType_t capture_window = pdMS_TO_TICKS(30000);
+    const TickType_t capture_window = pdMS_TO_TICKS(data.time_frame);
     const TickType_t started_at = xTaskGetTickCount();
 
-    ESP_LOGI(TAG, "Waiting up to 30 seconds for a valid Sub-GHz signal...");
+    ESP_LOGI(TAG, "Waiting up to %d ms for a valid Sub-GHz signal...", data.time_frame);
     zv_uart_send_line(SUBGHZ_COMMAND_RES_CAPTURE_START);
+
+    zv_cc1101_set_frequency(data.signal);
     while ((xTaskGetTickCount() - started_at) < capture_window)
     {
         TickType_t elapsed = xTaskGetTickCount() - started_at;
