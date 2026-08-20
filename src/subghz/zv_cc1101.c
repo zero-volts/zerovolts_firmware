@@ -315,9 +315,19 @@ esp_err_t zv_cc1101_wait_for_rx()
     return ESP_ERR_TIMEOUT;
 }
 
-void zv_cc1101_set_frequency(uint32_t frequency)
+esp_err_t zv_cc1101_set_frequency(uint32_t frequency)
 {
+    // TODO: falta implementar que al cambiar de frecuencia deberian actualizarse los registros 
+    // los campos de cc1101_base_config tales como "FREQ2/FREQ1/FREQ0" deberian ser cambiados para
+    // la frecuencia seleccionada.
+    if (frequency != FREQ_433_HZ)
+    {
+        ESP_LOGW(TAG, "For now only supported the 433.92 frequency!");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
     context.frequency = frequency;
+    return ESP_OK;
 }
 
 /**

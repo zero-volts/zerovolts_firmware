@@ -64,7 +64,7 @@ esp_err_t zv_cc1101_read_config_register(uint8_t address, uint8_t *output_value)
 esp_err_t zv_cc1101_write_config_register(uint8_t address, uint8_t value);
 esp_err_t zv_cc1101_config_and_verify();
 esp_err_t zv_cc1101_wait_for_rx();
-void zv_cc1101_set_frequency(uint32_t frequency);
+esp_err_t zv_cc1101_set_frequency(uint32_t frequency);
 
 esp_err_t zv_cc1101_read_partnum(uint8_t *output_value);
 esp_err_t zv_cc1101_read_version(uint8_t *output_value);

@@ -22,8 +22,12 @@
 #define DATA_CHUNK_LINE_SIZE  512
 
 static const char *TAG = "ZV_SUBGHZ";
+typedef struct {
+    spi_device_handle_t device_handle;
+    bool is_capturing;
+} subghz_context;
 
-static spi_device_handle_t device_handle = NULL;
+static subghz_context local_ctx;
 
 static void zv_manual_reset(void)
 {
@@ -53,12 +57,12 @@ static esp_err_t spi_attach_device(void)
         .clock_speed_hz = CC1101_SPI_CLOCK_HZ
     };
 
-    return zv_spi_bus_add_device(&dev, &device_handle);
+    return zv_spi_bus_add_device(&dev, &local_ctx.device_handle);
 }
 
 esp_err_t zv_subghz_init(void)
 {
-    if (device_handle != NULL)
+    if (local_ctx.device_handle != NULL)
     {
         ESP_LOGW(TAG, "Sub-GHz is already initialized; resetting the radio and its resources");
         zv_subghz_deinit();
@@ -83,7 +87,7 @@ esp_err_t zv_subghz_init(void)
         return res;
     }
 
-    res = zv_cc1101_init(device_handle);
+    res = zv_cc1101_init(local_ctx.device_handle);
     if (res != ESP_OK)
     {
         ESP_LOGE(TAG, "Cannot initialize the CC1101 driver state: %s", esp_err_to_name(res));
@@ -243,12 +247,25 @@ static bool send_capture_chunks(const zv_cc1101_capture_t *cap)
     return true;
 }
 
+static void relase_capture_task()
+{
+    local_ctx.is_capturing = false;
+    vTaskDelete(NULL);
+}
+
 void subghz_listener_task(void *arg)
 {
+    if (local_ctx.is_capturing)
+    {
+        zv_uart_send_formatted_line("%s|reason=%s", SUBGHZ_COMMAND_RES_CAPTURE_FAIL, "busy");
+        vTaskDelete(NULL);
+        return; 
+    }
+
     capture_task_data_t *task_data = (capture_task_data_t *)arg;
     if (task_data == NULL)
     {
-        vTaskDelete(NULL);
+        relase_capture_task();
         return;
     }
 
@@ -263,7 +280,15 @@ void subghz_listener_task(void *arg)
     ESP_LOGI(TAG, "Waiting up to %d ms for a valid Sub-GHz signal...", data.time_frame);
     zv_uart_send_line(SUBGHZ_COMMAND_RES_CAPTURE_START);
 
-    zv_cc1101_set_frequency(data.signal);
+    esp_err_t result = zv_cc1101_set_frequency(data.signal);
+    if (result != ESP_OK) 
+    {
+        zv_uart_send_formatted_line("%s|reason=%s", SUBGHZ_COMMAND_RES_CAPTURE_ERROR, "not supported frequency");
+        relase_capture_task();
+        return; 
+    }
+
+    local_ctx.is_capturing = true;
     while ((xTaskGetTickCount() - started_at) < capture_window)
     {
         TickType_t elapsed = xTaskGetTickCount() - started_at;
@@ -282,7 +307,8 @@ void subghz_listener_task(void *arg)
         {
             ESP_LOGE(TAG, "Sub-GHz capture failed: %s", esp_err_to_name(result));
             zv_uart_send_formatted_line("%s|reason=%s", SUBGHZ_COMMAND_RES_CAPTURE_FAIL, esp_err_to_name(result));
-            vTaskDelete(NULL);
+
+            relase_capture_task();
             return;
         }
 
@@ -297,7 +323,8 @@ void subghz_listener_task(void *arg)
         {
             ESP_LOGE(TAG, "Sub-GHz capture could not be serialized into UART chunks");
             zv_uart_send_formatted_line("%s|reason=serialization", SUBGHZ_COMMAND_RES_CAPTURE_FAIL);
-            vTaskDelete(NULL);
+
+            relase_capture_task();
             return;
         }
 
@@ -308,24 +335,27 @@ void subghz_listener_task(void *arg)
                                     cap.count,
                                     chunks_amount,
                                     cap.count == CC1101_CAPTURE_MAX_DURATIONS);
-        vTaskDelete(NULL);
+        
+        relase_capture_task();
         return;
     }
 
     ESP_LOGI(TAG, "Sub-GHz capture timed out: no valid signal was received");
     zv_uart_send_formatted_line("%s|reason=timeout", SUBGHZ_COMMAND_RES_CAPTURE_FAIL);
-    vTaskDelete(NULL);
+    relase_capture_task();
 }
 
 void zv_subghz_deinit(void)
 {
     zv_cc1101_deinit();
 
-    if (device_handle != NULL)
+    if (local_ctx.device_handle != NULL)
     {
-        zv_spi_bus_remove_device(device_handle);
-        device_handle = NULL;
+        zv_spi_bus_remove_device(local_ctx.device_handle);
+        local_ctx.device_handle = NULL;
     }
+
+    local_ctx.is_capturing = false;
 
     zv_spi_bus_free();
 }

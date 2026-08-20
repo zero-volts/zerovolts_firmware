@@ -107,16 +107,21 @@ static void handle_subghz_capture(char *options)
 
     ESP_LOGI(TAG, "handle_subghz_capture %s", options);
 
-    char *signal_str = strtok(options, "|");
+    char *freq_str = strtok(options, "|");
+    char freq_buffer[CAPTURE_FIELD_BUFFER_SIZE] = {0};
+    if (!get_field_value(freq_str, "freq_hz", freq_buffer, CAPTURE_FIELD_BUFFER_SIZE))
+    {
+        ESP_LOGE(TAG, "Can't find the frequency selected!");
+        return;
+    }
 
-    ESP_LOGE(TAG, "signal_str: %s", signal_str);
-
-    char buffer_temp[CAPTURE_FIELD_BUFFER_SIZE] = {0};
-    get_field_value(signal_str, "freq_hz", buffer_temp, CAPTURE_FIELD_BUFFER_SIZE);
-
-    char buffer_timeframe[CAPTURE_FIELD_BUFFER_SIZE] = {0};
-    char *time_frame_str = strtok(NULL, "|");
-    get_field_value(time_frame_str, "timeout_ms", buffer_timeframe, CAPTURE_FIELD_BUFFER_SIZE);
+    char timeout_buffer[CAPTURE_FIELD_BUFFER_SIZE] = {0};
+    char *timeout_str = strtok(NULL, "|");
+    if (!get_field_value(timeout_str, "timeout_ms", timeout_buffer, CAPTURE_FIELD_BUFFER_SIZE))
+    {
+        ESP_LOGE(TAG, "Can't find the time frame to wait!");
+        return;
+    }
 
     capture_task_data_t *data = pvPortMalloc(sizeof(*data));
     if (data == NULL)
@@ -125,8 +130,8 @@ static void handle_subghz_capture(char *options)
         return;
     }
 
-    data->signal = strtoul(buffer_temp, NULL, 10);
-    data->time_frame = strtoul(buffer_timeframe, NULL, 10);
+    data->signal = strtoul(freq_buffer, NULL, 10);
+    data->time_frame = strtoul(timeout_buffer, NULL, 10);
 
     BaseType_t task_created = xTaskCreate(subghz_listener_task, "subghz_listener", 4096, data, 5, NULL );
     if (task_created != pdPASS)
