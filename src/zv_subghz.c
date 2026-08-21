@@ -5,6 +5,7 @@
 
 #include "esp_log.h"
 #include "esp_rom_sys.h"   // esp_rom_delay_us()
+#include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -202,7 +203,7 @@ static bool capture_looks_like_noise(const zv_cc1101_capture_t *cap)
  * example:
  *  SUBGHZ_CAPTURE:DATA|seq=0|chunks=8|count=32|timings=-10375,+254,...
  */
-static bool send_capture_chunks(const zv_cc1101_capture_t *cap)
+static bool send_capture_chunks(const zv_cc1101_capture_t *cap, uint64_t capture_id)
 {
     if (cap == NULL || cap->count == 0)
         return false;
@@ -219,9 +220,9 @@ static bool send_capture_chunks(const zv_cc1101_capture_t *cap)
         char line[DATA_CHUNK_LINE_SIZE];
 
         int written = snprintf(line, sizeof(line),
-                               "%s|seq=%u|chunks=%u|count=%u|timings=",
+                               "%s|capture_id=%" PRIu64 "|seq=%u|chunks=%u|count=%u|timings=",
                                SUBGHZ_COMMAND_RES_CAPTURE_DATA,
-                               seq, chunks_amount, values_in_chunk);
+                               capture_id, seq, chunks_amount, values_in_chunk);
 
         if (written < 0 || (size_t)written >= sizeof(line))
             return false;
@@ -319,7 +320,8 @@ void subghz_listener_task(void *arg)
         }
 
         ESP_LOGI(TAG, "Sub-GHz signal captured: %u pulse durations at %lu Hz", cap.count, (unsigned long)cap.freq_hz);
-        if (!send_capture_chunks(&cap))
+        uint64_t capture_id = (uint64_t)esp_timer_get_time();
+        if (!send_capture_chunks(&cap, capture_id))
         {
             ESP_LOGE(TAG, "Sub-GHz capture could not be serialized into UART chunks");
             zv_uart_send_formatted_line("%s|reason=serialization", SUBGHZ_COMMAND_RES_CAPTURE_FAIL);
@@ -329,12 +331,9 @@ void subghz_listener_task(void *arg)
         }
 
         const uint16_t chunks_amount = (cap.count + DATA_CHUNK_MAX_VALUES - 1) / DATA_CHUNK_MAX_VALUES;
-        zv_uart_send_formatted_line("%s|freq=%lu|count=%u|chunks=%u|buffer_full=%u",
-                                    SUBGHZ_COMMAND_RES_CAPTURE_DONE,
-                                    (unsigned long)cap.freq_hz,
-                                    cap.count,
-                                    chunks_amount,
-                                    cap.count == CC1101_CAPTURE_MAX_DURATIONS);
+        zv_uart_send_formatted_line("%s|capture_id=%" PRIu64 "|freq=%lu|count=%u|chunks=%u|buffer_full=%u",
+                                    SUBGHZ_COMMAND_RES_CAPTURE_DONE, capture_id, (unsigned long)cap.freq_hz,
+                                    cap.count, chunks_amount, cap.count == CC1101_CAPTURE_MAX_DURATIONS);
         
         relase_capture_task();
         return;
