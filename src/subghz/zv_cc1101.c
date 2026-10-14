@@ -4,12 +4,14 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "driver/rmt_rx.h"
+#include "driver/rmt_tx.h"
 #include "freertos/queue.h"
 
-#define CC1101_RMT_SYMBOL_COUNT 128
-#define FREQ_433_HZ     433920000
-#define CC1101_RX_WAIT_MAX_ATTEMPTS    100
-#define CC1101_RX_WAIT_INTERVAL_US     100
+#define CC1101_RMT_SYMBOL_COUNT     128
+#define FREQ_433_HZ                 433920000
+#define CC1101_RX_WAIT_MAX_ATTEMPTS 100
+#define CC1101_RX_WAIT_INTERVAL_US  100
+#define CC1101_RESOLUTION_HZ        1 * 1000 * 1000    // 1 MHz = 1 µs/tick
 
 static const char *TAG = "ZV_CC1101";
 
@@ -17,6 +19,9 @@ typedef struct {
     spi_device_handle_t cc_device_handle;
     rmt_channel_handle_t s_rx_chan_handle;
     QueueHandle_t sr_rx_queue;
+
+    rmt_channel_handle_t tx_chan_handle;
+    rmt_encoder_handle_t encoder_handle;
     uint32_t frequency;
 } cc1101_states_ctx;
 typedef struct {
@@ -120,6 +125,22 @@ static esp_err_t zv_cc1101_read_register(uint8_t address, uint8_t burst, uint8_t
     return ESP_OK;
 }
 
+static void zv_cc1101_rmt_tx_cleanup(void)
+{
+     if (context.tx_chan_handle != NULL)
+    {
+        rmt_disable(context.tx_chan_handle);
+        rmt_del_channel(context.tx_chan_handle);
+        context.tx_chan_handle = NULL;
+    }
+
+    if (context.encoder_handle != NULL)
+    {
+        rmt_del_encoder(context.encoder_handle);
+        context.encoder_handle = NULL;
+    }
+}
+
 static void zv_cc1101_rmt_rx_cleanup(void)
 {
     if (context.s_rx_chan_handle != NULL)
@@ -144,6 +165,45 @@ static bool IRAM_ATTR rmt_rx_done_cb(rmt_channel_handle_t channel, const rmt_rx_
     return high_woken == pdTRUE;
 }
 
+static esp_err_t zv_cc1101_rmt_tx_setup()
+{
+    if (context.tx_chan_handle)
+        return ESP_OK;
+
+    rmt_tx_channel_config_t tx_channel_config = {
+        .clk_src           = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz     = CC1101_RESOLUTION_HZ,
+        .mem_block_symbols = CC1101_RMT_SYMBOL_COUNT,
+        .gpio_num          = ZV_SUB_GHZ_PIN_GDO0,
+        .trans_queue_depth = 2,
+        .flags.with_dma    = false
+    };
+
+    esp_err_t err = rmt_new_tx_channel(&tx_channel_config, &context.tx_chan_handle);
+    if (err != ESP_OK)
+    {
+        zv_cc1101_rmt_tx_cleanup();
+        return err;
+    }
+
+    rmt_copy_encoder_config_t encoder_config = {};
+    err = rmt_new_copy_encoder(&encoder_config, &context.encoder_handle);
+    if (err != ESP_OK)
+    {
+        zv_cc1101_rmt_tx_cleanup();
+        return err;
+    }
+
+    err = rmt_enable(context.tx_chan_handle);
+    if (err != ESP_OK)
+    {
+        zv_cc1101_rmt_tx_cleanup();
+        return err;
+    }
+
+    return ESP_OK;
+}
+
 static esp_err_t zv_cc1101_rmt_rx_setup()
 {
     if (context.s_rx_chan_handle)
@@ -155,14 +215,14 @@ static esp_err_t zv_cc1101_rmt_rx_setup()
     
     rmt_rx_channel_config_t cfg = {
         .clk_src           = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz     = 1 * 1000 * 1000,    /* 1 MHz = 1 µs/tick */
+        .resolution_hz     = CC1101_RESOLUTION_HZ,
         .mem_block_symbols = CC1101_RMT_SYMBOL_COUNT,
         .gpio_num          = ZV_SUB_GHZ_PIN_GDO0,
         .flags.invert_in   = false, 
         .flags.with_dma    = false,
     };
 
-    esp_err_t err  = rmt_new_rx_channel(&cfg, &context.s_rx_chan_handle);
+    esp_err_t err = rmt_new_rx_channel(&cfg, &context.s_rx_chan_handle);
     if (err != ESP_OK)
     {
         zv_cc1101_rmt_rx_cleanup();
@@ -330,6 +390,40 @@ esp_err_t zv_cc1101_set_frequency(uint32_t frequency)
     return ESP_OK;
 }
 
+esp_err_t zv_cc1101_transmit(zv_cc1101_capture_t *capture)
+{
+    if (capture == NULL)
+        return ESP_ERR_INVALID_ARG;
+
+    ESP_RETURN_ON_ERROR(zv_cc1101_rmt_tx_setup(), TAG, "rmt tx install");
+
+    int symbols_counter = 0;
+    static rmt_symbol_word_t tx_symbols[CC1101_RMT_SYMBOL_COUNT];
+    for (uint16_t i = 0; i < capture->count; i += 2)
+    {
+        rmt_symbol_word_t symbol = {
+            .level0 = capture->durations_us[i] >= 0 ? 1 : 0,
+            .duration0 = capture->durations_us[i],
+            .level1 = capture->durations_us[i + 1] >= 0 ? 1 : 0,
+            .duration1 = capture->durations_us[i + 1]
+        };
+
+        tx_symbols[symbols_counter++] = symbol;
+    }
+
+    rmt_transmit_config_t tx_config = { .loop_count = 0 };
+    esp_err_t result = rmt_transmit(context.tx_chan_handle, context.encoder_handle, tx_symbols, sizeof (rmt_symbol_word_t), &tx_config);
+    if (result != ESP_OK)
+        return result;
+
+    result = rmt_tx_wait_all_done(context.tx_chan_handle, 2000);
+    if (result != ESP_OK)
+        return result;
+
+    return ESP_OK;
+}
+
+
 /**
  *  Data flow from a CC1101 capture -> RMT -> pulses:
  *
@@ -375,7 +469,7 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
     if (out == NULL)
         return ESP_ERR_INVALID_ARG;
 
-    ESP_RETURN_ON_ERROR(zv_cc1101_rmt_rx_setup(), TAG, "rmt install");
+    ESP_RETURN_ON_ERROR(zv_cc1101_rmt_rx_setup(), TAG, "rmt rx install");
 
     out->count = 0;
     xQueueReset(context.sr_rx_queue);

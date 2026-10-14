@@ -71,6 +71,7 @@ esp_err_t zv_cc1101_read_version(uint8_t *output_value);
 esp_err_t zv_cc1101_get_rssi_dbm(int8_t *rssi_dbm);
 
 esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms);
+esp_err_t zv_cc1101_transmit(zv_cc1101_capture_t *capture);
 void zv_cc1101_deinit(void);
 
 #endif /* ZV_CC1101_H */
