@@ -12,7 +12,6 @@
 #include "driver/gpio.h"   // gpio_config(), gpio_set_level()
 #include "driver/spi_master.h"
 
-#include "zv_cc1101.h"
 #include "zv_spi_bus.h"
 #include "zv_uart_commands.h"
 
@@ -158,7 +157,7 @@ esp_err_t zv_subghz_init(void)
         return res;
     }
 
-    res = zv_cc1101_wait_for_rx();
+    res = zv_cc1101_wait_for_marc_state(CC1101_MARCSTATE_RX);
     if (res != ESP_OK)
     {
         ESP_LOGE(TAG, "CC1101 did not reach RX state before the timeout: %s",
@@ -342,6 +341,56 @@ void subghz_listener_task(void *arg)
     ESP_LOGI(TAG, "Sub-GHz capture timed out: no valid signal was received");
     zv_uart_send_formatted_line("%s|reason=timeout", SUBGHZ_COMMAND_RES_CAPTURE_FAIL);
     relase_capture_task();
+}
+
+esp_err_t zv_subghz_transmit(zv_cc1101_capture_t *capture)
+{
+    ESP_LOGI(TAG, "en la funcion zv_subghz_transmit ...");
+
+    static const int32_t data[] = {
+        -10347, +322, -998, +328, -1022, +1007, -312, +999, -358, +320, -987, +353, -982,
+        +1005, -335, +352, -979, +349, -985, +339, -1012, +1001, -327, +329, -1012, +344,
+        -983, +347, -988, +327, -998, +1029, -324, +1009, -330, +322, -1012, +1004, -325,
+        +331, -1004, +996, -328, +348, -1002, +330, -998, +323, -997, +356,
+
+        -10319, +340, -1014, +325, -1011, +1003, -325, +1004, -344, +307, -1005, +339,
+        -1011, +1002, -331, +330, -1000, +329, -1004, +325, -1003, +1016, -327, +324,
+        -1024, +303, -1026, +323, -995, +330, -1022, +980, -338, +1001, -346, +339, -982,
+        +999, -358, +308, -1025, +999, -331, +329, -1014, +324, -1006, +326, -1003, +334,
+
+        -10342, +330, -1008, +314, -1023, +982, -325, +1027, -327, +329, -1005, +346,
+        -981, +1001, -331, +333, -1014, +328, -1008, +338, -1000, +984, -329, +353, -985,
+        +352, -988, +349, -981, +346, -994, +1009, -330, +1007, -317, +335, -1006, +1016,
+        -326, +327, -1012, +1006, -306, +353, -1006, +325, -1011, +316, -1011, +323,
+
+        -10340, +347, -1009, +316, -1012, +1000, -328, +1011, -314, +345, -1008, +314,
+        -1025, +984, -329, +355, -987, +326, -1011, +346, -980, +1025, -332, +308, -1014,
+        +328, -1008, +337, -1002, +333, -988, +1006, -349, +982, -349, +323, -1004, +1000,
+        -330, +341, -999, +999, -331, +330, -1015, +326, -1009, +314, -1024, +332,
+
+        -10317, +354, -1005, +315, -1022, +1009, -301, +1028, -327, +330, -986, +340,
+        -1010, +999, -329, +329, -1012, +345, -981, +348, -1002, +1009, -302, +352, -983,
+        +353, -989, +349, -982, +345, -995, +1008, -331, +1006, -345, +308, -1004, +1017,
+        -328, +326, -1012, +1006, -307, +353, -1010, +307, -1008, +338, -1011, +323,
+
+        -10325, +348, -1010, +346, -982, +1000
+    };
+
+    static zv_cc1101_capture_t tmp_capture = {
+        .count = 256,
+        .freq_hz = 433920000
+    };
+
+    ESP_LOGI(TAG, "antes de transmitir ...");
+    memcpy(tmp_capture.durations_us, data, sizeof(data));
+
+    esp_err_t result = zv_cc1101_transmit(&tmp_capture);
+    if (result != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Problem strying yo send sub-ghz, error: %s",  esp_err_to_name(result));
+    }
+
+    return result;
 }
 
 void zv_subghz_deinit(void)

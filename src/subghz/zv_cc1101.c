@@ -53,7 +53,7 @@ static const cc1101_register_config_t cc1101_base_config[] = {
     { "AGCCTRL2", 0x1B, 0x03 },
     { "AGCCTRL1", 0x1C, 0x40 },
     { "AGCCTRL0", 0x1D, 0x91 },
-    { "FREND0",   0x22, 0x11 },
+    { "FREND0",   0x22, 0x11 }, // 0x11 = 0001 0001 - OOK/ASK
     { "TEST2",    0x2C, 0x81 },
     { "TEST1",    0x2D, 0x35 },
     { "TEST0",    0x2E, 0x09 },
@@ -355,7 +355,7 @@ esp_err_t zv_cc1101_init(spi_device_handle_t handle)
     return ESP_OK;
 }
 
-esp_err_t zv_cc1101_wait_for_rx()
+esp_err_t zv_cc1101_wait_for_marc_state(uint8_t waiting_state)
 {
     esp_err_t regis_result = ESP_OK;
     for (int i = 0; i < CC1101_RX_WAIT_MAX_ATTEMPTS; i++)
@@ -366,7 +366,7 @@ esp_err_t zv_cc1101_wait_for_rx()
             return regis_result;
 
         state &= 0x1F;
-        if (state == CC1101_MARCSTATE_RX)
+        if (state == waiting_state)
             return ESP_OK;
 
         esp_rom_delay_us(CC1101_RX_WAIT_INTERVAL_US);
@@ -390,35 +390,108 @@ esp_err_t zv_cc1101_set_frequency(uint32_t frequency)
     return ESP_OK;
 }
 
+// 1.- Detener estados que esten corriendo, dejar en IDLE
+// 2.- Cambiar potencia de salida señal PATABLE
+// 3.- Cambiar a modo de transmison
 esp_err_t zv_cc1101_transmit(zv_cc1101_capture_t *capture)
 {
     if (capture == NULL)
         return ESP_ERR_INVALID_ARG;
 
+    esp_err_t result = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
+    if (result != ESP_OK)
+        return result;
+
+    
+    ESP_LOGI(TAG, "antes de zv_cc1101_rmt_tx_setup ...");
     ESP_RETURN_ON_ERROR(zv_cc1101_rmt_tx_setup(), TAG, "rmt tx install");
 
     int symbols_counter = 0;
     static rmt_symbol_word_t tx_symbols[CC1101_RMT_SYMBOL_COUNT];
     for (uint16_t i = 0; i < capture->count; i += 2)
     {
+        int32_t level0 = capture->durations_us[i];
+        int32_t pulse0 = level0 < 0 ? (uint32_t)(-capture->durations_us[i]) : (uint32_t)capture->durations_us[i];
+
+        int32_t level1 = capture->durations_us[i + 1];
+        int32_t pulse1 = level1 < 0 ? (uint32_t)(-capture->durations_us[i + 1]) : (uint32_t)capture->durations_us[i + 1];
+
         rmt_symbol_word_t symbol = {
             .level0 = capture->durations_us[i] >= 0 ? 1 : 0,
-            .duration0 = capture->durations_us[i],
+            .duration0 = pulse0,
             .level1 = capture->durations_us[i + 1] >= 0 ? 1 : 0,
-            .duration1 = capture->durations_us[i + 1]
+            .duration1 = pulse1
         };
 
         tx_symbols[symbols_counter++] = symbol;
     }
 
+    ESP_LOGI(TAG, "antes de cambiar PATABLE...");
+    //TODO: crear funcion especifica para escribir registro
+    uint8_t command[] = {
+         (uint8_t)(CC1101_PATABLE_ADDRESS | CC1101_WRITE_BURST),
+         0x0, 0x0E
+    };
+
+    // Changing PATABLE value
+    // 24 Output Power Programming, page 59-60 https://www.ti.com/lit/ds/symlink/cc1101.pdf
+    spi_transaction_t transaction = {
+        .length    = 3 * 8,
+        .tx_buffer = &command
+    };
+
+    result = spi_device_polling_transmit(context.cc_device_handle, &transaction);
+    if (result != ESP_OK)
+        return result;
+
+    ESP_LOGI(TAG, "PATABLE listo");
+
+    result = zv_cc1101_send_strobe(CC1101_STROBE_STX);
+    if (result != ESP_OK)
+        return result;
+
+    ESP_LOGI(TAG, "cambio a transmision CC1101_STROBE_STX...");
+
+    result = zv_cc1101_wait_for_marc_state(CC1101_MARCSTATE_TX);
+    if (result != ESP_OK)
+        return result;
+
+    if (!context.tx_chan_handle )
+    {
+        ESP_LOGE(TAG, "transmission handle is null");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!context.encoder_handle)
+    {
+        ESP_LOGE(TAG, "encoder handle is null");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_LOGI(TAG, "por transmitir la señal...");
     rmt_transmit_config_t tx_config = { .loop_count = 0 };
-    esp_err_t result = rmt_transmit(context.tx_chan_handle, context.encoder_handle, tx_symbols, sizeof (rmt_symbol_word_t), &tx_config);
+    result = rmt_transmit(
+        context.tx_chan_handle, 
+        context.encoder_handle, 
+        tx_symbols, 
+        sizeof(rmt_symbol_word_t) * symbols_counter, 
+        &tx_config
+    );
+
     if (result != ESP_OK)
         return result;
 
     result = rmt_tx_wait_all_done(context.tx_chan_handle, 2000);
     if (result != ESP_OK)
         return result;
+
+    ESP_LOGI(TAG, "señal enviada...");
+
+    result = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
+    if (result != ESP_OK)
+        return result;
+
+    ESP_LOGI(TAG, "volviendo al estado IDLE...");
 
     return ESP_OK;
 }

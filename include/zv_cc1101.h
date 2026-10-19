@@ -12,10 +12,12 @@
 /* SPI access bits */
 #define CC1101_READ_SINGLE              0x80
 #define CC1101_READ_BURST               0xC0
+#define CC1101_WRITE_BURST              0x40
 
 /* Command strobes */
 #define CC1101_STROBE_SRES              0x30
-#define CC1101_STROBE_SRX               0x34
+#define CC1101_STROBE_SRX               0x34    // Enable RX
+#define CC1101_STROBE_STX               0x35    // In IDLE state: Enable TX
 #define CC1101_STROBE_SIDLE             0x36
 #define CC1101_STROBE_SFRX              0x3A
 
@@ -27,6 +29,9 @@
 
 /* MARCSTATE values */
 #define CC1101_MARCSTATE_RX             0x0D
+#define CC1101_MARCSTATE_TX             0x13
+
+#define CC1101_PATABLE_ADDRESS          0X3E
 
 #define ZV_SUB_GHZ_PIN_GDO0     27
 #define ZV_SUB_GHZ_PIN_GDO2     26
@@ -63,7 +68,7 @@ esp_err_t zv_cc1101_read_config_register(uint8_t address, uint8_t *output_value)
  */
 esp_err_t zv_cc1101_write_config_register(uint8_t address, uint8_t value);
 esp_err_t zv_cc1101_config_and_verify();
-esp_err_t zv_cc1101_wait_for_rx();
+esp_err_t zv_cc1101_wait_for_marc_state(uint8_t waiting_state);
 esp_err_t zv_cc1101_set_frequency(uint32_t frequency);
 
 esp_err_t zv_cc1101_read_partnum(uint8_t *output_value);
