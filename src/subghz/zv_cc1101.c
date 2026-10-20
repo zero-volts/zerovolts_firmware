@@ -8,6 +8,7 @@
 #include "freertos/queue.h"
 
 #define CC1101_RMT_SYMBOL_COUNT     128
+#define CC1101_RMT_MAX_DURATION_TICKS 32767U
 #define FREQ_433_HZ                 433920000
 #define CC1101_RX_WAIT_MAX_ATTEMPTS 100
 #define CC1101_RX_WAIT_INTERVAL_US  100
@@ -24,6 +25,7 @@ typedef struct {
     rmt_encoder_handle_t encoder_handle;
     uint32_t frequency;
 } cc1101_states_ctx;
+
 typedef struct {
     const char *name;
     uint8_t address;
@@ -54,6 +56,7 @@ static const cc1101_register_config_t cc1101_base_config[] = {
     { "AGCCTRL1", 0x1C, 0x40 },
     { "AGCCTRL0", 0x1D, 0x91 },
     { "FREND0",   0x22, 0x11 }, // 0x11 = 0001 0001 - OOK/ASK
+    { "FSCAL2",   0x24, 0x2A }, // Select the high VCO for 433.92 MHz with TEST0=0x09
     { "TEST2",    0x2C, 0x81 },
     { "TEST1",    0x2D, 0x35 },
     { "TEST0",    0x2E, 0x09 },
@@ -125,9 +128,19 @@ static esp_err_t zv_cc1101_read_register(uint8_t address, uint8_t burst, uint8_t
     return ESP_OK;
 }
 
+static esp_err_t zv_cc1101_write_register(uint8_t *command, size_t command_bits)
+{
+    spi_transaction_t transaction = {
+        .length = command_bits,
+        .tx_buffer = command,
+    };
+
+    return spi_device_polling_transmit(context.cc_device_handle, &transaction);
+}
+
 static void zv_cc1101_rmt_tx_cleanup(void)
 {
-     if (context.tx_chan_handle != NULL)
+    if (context.tx_chan_handle != NULL)
     {
         rmt_disable(context.tx_chan_handle);
         rmt_del_channel(context.tx_chan_handle);
@@ -167,6 +180,8 @@ static bool IRAM_ATTR rmt_rx_done_cb(rmt_channel_handle_t channel, const rmt_rx_
 
 static esp_err_t zv_cc1101_rmt_tx_setup()
 {
+    zv_cc1101_rmt_rx_cleanup();
+
     if (context.tx_chan_handle)
         return ESP_OK;
 
@@ -176,7 +191,10 @@ static esp_err_t zv_cc1101_rmt_tx_setup()
         .mem_block_symbols = CC1101_RMT_SYMBOL_COUNT,
         .gpio_num          = ZV_SUB_GHZ_PIN_GDO0,
         .trans_queue_depth = 2,
-        .flags.with_dma    = false
+        .flags = {
+            .invert_out = false,
+            .with_dma   = false,
+        }
     };
 
     esp_err_t err = rmt_new_tx_channel(&tx_channel_config, &context.tx_chan_handle);
@@ -206,6 +224,8 @@ static esp_err_t zv_cc1101_rmt_tx_setup()
 
 static esp_err_t zv_cc1101_rmt_rx_setup()
 {
+    zv_cc1101_rmt_tx_cleanup();
+
     if (context.s_rx_chan_handle)
         return ESP_OK;
 
@@ -357,6 +377,9 @@ esp_err_t zv_cc1101_init(spi_device_handle_t handle)
 
 esp_err_t zv_cc1101_wait_for_marc_state(uint8_t waiting_state)
 {
+    // Confirm two consecutive matches to tolerate transient SPI status reads.
+
+    bool previous_match = false;
     esp_err_t regis_result = ESP_OK;
     for (int i = 0; i < CC1101_RX_WAIT_MAX_ATTEMPTS; i++)
     {
@@ -366,9 +389,10 @@ esp_err_t zv_cc1101_wait_for_marc_state(uint8_t waiting_state)
             return regis_result;
 
         state &= 0x1F;
-        if (state == waiting_state)
+        if (state == waiting_state && previous_match)
             return ESP_OK;
 
+        previous_match = state == waiting_state;
         esp_rom_delay_us(CC1101_RX_WAIT_INTERVAL_US);
     }
 
@@ -390,112 +414,101 @@ esp_err_t zv_cc1101_set_frequency(uint32_t frequency)
     return ESP_OK;
 }
 
-// 1.- Detener estados que esten corriendo, dejar en IDLE
-// 2.- Cambiar potencia de salida señal PATABLE
-// 3.- Cambiar a modo de transmison
-esp_err_t zv_cc1101_transmit(zv_cc1101_capture_t *capture)
+static esp_err_t zv_cc1101_finish_transmission (esp_err_t error)
 {
-    if (capture == NULL)
+    esp_err_t result = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
+    if (result == ESP_OK)
+        result = zv_cc1101_wait_for_marc_state(CC1101_MARCSTATE_SIDLE);
+
+    zv_cc1101_rmt_tx_cleanup();
+    return  error != ESP_OK ? error : result;
+}
+
+esp_err_t zv_cc1101_transmit(const zv_cc1101_capture_t *capture, uint16_t repetitions)
+{
+    if (capture == NULL || repetitions == 0)
         return ESP_ERR_INVALID_ARG;
+
+    if (capture->count == 0 || capture->count > CC1101_CAPTURE_MAX_DURATIONS ||
+        capture->count % 2 != 0)
+        return ESP_ERR_INVALID_SIZE;
+
+    size_t symbols_count = 0;
+    static rmt_symbol_word_t tx_symbols[CC1101_RMT_SYMBOL_COUNT];    
+    for (uint16_t i = 0; i < capture->count; i += 2)
+    {
+        if (symbols_count >= CC1101_RMT_SYMBOL_COUNT)
+            return ESP_ERR_INVALID_SIZE;
+
+        int32_t pulse0 = capture->durations_us[i];
+        int32_t pulse1 = capture->durations_us[i + 1];
+        uint32_t ticks0 = pulse0 < 0 ? (uint32_t)(-(int64_t)pulse0) : (uint32_t)pulse0;
+        uint32_t ticks1 = pulse1 < 0 ? (uint32_t)(-(int64_t)pulse1) : (uint32_t)pulse1;
+
+        /*
+        * Each RMT symbol stores two pulse durations, each using a 15-bit field.
+        * Valid durations range from 1 to 32767 ticks; zero marks the end of a transmission.
+        *
+        * With the RMT configured at 1 MHz, each tick represents 1 microsecond (µs).
+        * This allows a maximum pulse duration of 32767 µs (~32.7 ms).
+        *
+        * If the RMT resolution changes, pulse durations must be converted from microseconds to ticks before validation. 
+        * The 32767-tick hardware limit remains unchanged, but the maximum representable time changes accordingly.
+        */
+        if (ticks0 == 0 || ticks1 == 0 || ticks0 > CC1101_RMT_MAX_DURATION_TICKS || ticks1 > CC1101_RMT_MAX_DURATION_TICKS)
+            return ESP_ERR_INVALID_ARG;
+
+        rmt_symbol_word_t symbol = {
+            .level0 = pulse0 > 0, 
+            .duration0 = ticks0,
+            .level1 = pulse1 > 0, 
+            .duration1 = ticks1,
+        };
+
+        tx_symbols[symbols_count++] = symbol;
+    }
 
     esp_err_t result = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
     if (result != ESP_OK)
-        return result;
+        return zv_cc1101_finish_transmission(result);
 
-    
-    ESP_LOGI(TAG, "antes de zv_cc1101_rmt_tx_setup ...");
-    ESP_RETURN_ON_ERROR(zv_cc1101_rmt_tx_setup(), TAG, "rmt tx install");
-
-    int symbols_counter = 0;
-    static rmt_symbol_word_t tx_symbols[CC1101_RMT_SYMBOL_COUNT];
-    for (uint16_t i = 0; i < capture->count; i += 2)
-    {
-        int32_t level0 = capture->durations_us[i];
-        int32_t pulse0 = level0 < 0 ? (uint32_t)(-capture->durations_us[i]) : (uint32_t)capture->durations_us[i];
-
-        int32_t level1 = capture->durations_us[i + 1];
-        int32_t pulse1 = level1 < 0 ? (uint32_t)(-capture->durations_us[i + 1]) : (uint32_t)capture->durations_us[i + 1];
-
-        rmt_symbol_word_t symbol = {
-            .level0 = capture->durations_us[i] >= 0 ? 1 : 0,
-            .duration0 = pulse0,
-            .level1 = capture->durations_us[i + 1] >= 0 ? 1 : 0,
-            .duration1 = pulse1
-        };
-
-        tx_symbols[symbols_counter++] = symbol;
-    }
-
-    ESP_LOGI(TAG, "antes de cambiar PATABLE...");
-    //TODO: crear funcion especifica para escribir registro
-    uint8_t command[] = {
-         (uint8_t)(CC1101_PATABLE_ADDRESS | CC1101_WRITE_BURST),
-         0x0, 0x0E
-    };
-
-    // Changing PATABLE value
-    // 24 Output Power Programming, page 59-60 https://www.ti.com/lit/ds/symlink/cc1101.pdf
-    spi_transaction_t transaction = {
-        .length    = 3 * 8,
-        .tx_buffer = &command
-    };
-
-    result = spi_device_polling_transmit(context.cc_device_handle, &transaction);
+    result = zv_cc1101_wait_for_marc_state(CC1101_MARCSTATE_SIDLE);
     if (result != ESP_OK)
-        return result;
+        return zv_cc1101_finish_transmission(result);
 
-    ESP_LOGI(TAG, "PATABLE listo");
+    result = zv_cc1101_rmt_tx_setup();
+    if (result != ESP_OK)
+        return zv_cc1101_finish_transmission(result);
 
+    uint8_t command[] = { CC1101_PATABLE_ADDRESS | CC1101_WRITE_BURST, 0x00, 0x60 };
+    result = zv_cc1101_write_register(command, sizeof(command) * 8);
+    if (result != ESP_OK)
+        return zv_cc1101_finish_transmission(result);
+    
     result = zv_cc1101_send_strobe(CC1101_STROBE_STX);
     if (result != ESP_OK)
-        return result;
-
-    ESP_LOGI(TAG, "cambio a transmision CC1101_STROBE_STX...");
+        return zv_cc1101_finish_transmission(result);
 
     result = zv_cc1101_wait_for_marc_state(CC1101_MARCSTATE_TX);
     if (result != ESP_OK)
-        return result;
+        return zv_cc1101_finish_transmission(result);
 
-    if (!context.tx_chan_handle )
+    rmt_transmit_config_t tx_config = { .loop_count = 0, .flags.eot_level = 0 };
+    for (uint16_t repeat = 0; repeat < repetitions; repeat++)
     {
-        ESP_LOGE(TAG, "transmission handle is null");
-        return ESP_ERR_INVALID_ARG;
+        result = rmt_transmit(context.tx_chan_handle, context.encoder_handle, tx_symbols,
+                              symbols_count * sizeof(tx_symbols[0]), &tx_config);
+
+        if (result != ESP_OK)
+            return zv_cc1101_finish_transmission(result);
+
+        result = rmt_tx_wait_all_done(context.tx_chan_handle, 2000);
+        if (result != ESP_OK)
+            return zv_cc1101_finish_transmission(result);
     }
 
-    if (!context.encoder_handle)
-    {
-        ESP_LOGE(TAG, "encoder handle is null");
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    ESP_LOGI(TAG, "por transmitir la señal...");
-    rmt_transmit_config_t tx_config = { .loop_count = 0 };
-    result = rmt_transmit(
-        context.tx_chan_handle, 
-        context.encoder_handle, 
-        tx_symbols, 
-        sizeof(rmt_symbol_word_t) * symbols_counter, 
-        &tx_config
-    );
-
-    if (result != ESP_OK)
-        return result;
-
-    result = rmt_tx_wait_all_done(context.tx_chan_handle, 2000);
-    if (result != ESP_OK)
-        return result;
-
-    ESP_LOGI(TAG, "señal enviada...");
-
-    result = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
-    if (result != ESP_OK)
-        return result;
-
-    ESP_LOGI(TAG, "volviendo al estado IDLE...");
-
-    return ESP_OK;
+    return zv_cc1101_finish_transmission(result);
 }
-
 
 /**
  *  Data flow from a CC1101 capture -> RMT -> pulses:
@@ -622,6 +635,10 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
 
 void zv_cc1101_deinit(void)
 {
+    zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
+
     zv_cc1101_rmt_rx_cleanup();
+    zv_cc1101_rmt_tx_cleanup();
+
     context.cc_device_handle = NULL;
 }

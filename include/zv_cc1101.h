@@ -30,6 +30,7 @@
 /* MARCSTATE values */
 #define CC1101_MARCSTATE_RX             0x0D
 #define CC1101_MARCSTATE_TX             0x13
+#define CC1101_MARCSTATE_SIDLE          0x01
 
 #define CC1101_PATABLE_ADDRESS          0X3E
 
@@ -76,7 +77,7 @@ esp_err_t zv_cc1101_read_version(uint8_t *output_value);
 esp_err_t zv_cc1101_get_rssi_dbm(int8_t *rssi_dbm);
 
 esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms);
-esp_err_t zv_cc1101_transmit(zv_cc1101_capture_t *capture);
+esp_err_t zv_cc1101_transmit(const zv_cc1101_capture_t *capture, uint16_t repetitions);
 void zv_cc1101_deinit(void);
 
 #endif /* ZV_CC1101_H */
