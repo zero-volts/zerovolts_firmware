@@ -13,6 +13,7 @@
 #include "esp_gatt_common_api.h"
 
 #include "zv_uart_commands.h"
+#include "zv_uart_protocol.h"
 
 static const char *TAG = "ZEROVOLTS_FIRMWARE";
 
@@ -41,6 +42,7 @@ void app_main(void)
 
     zv_init_ble_handlers();
     zv_uart_init();
+    zv_uart_protocol_init();
 
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "==== ZeroVolts Firmware initialized ====");

@@ -2,21 +2,19 @@
 #define ZV_UART_H
 
 #include <stdbool.h>
+#include "driver/gpio.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef struct {
-    long signal;
-    int time_frame;
-} capture_task_data_t;
+#define ZV_UART_BUF_SIZE 256
+#define ZV_UART_PORT UART_NUM_2
 
 void zv_uart_init(void);
 void zv_uart_send_line(const char *line);
 void zv_uart_send_formatted_line(const char *message, ...);
 bool zv_uart_is_ready(void);
-void zv_uart_parse_commands(void);
 
 #ifdef __cplusplus
 }

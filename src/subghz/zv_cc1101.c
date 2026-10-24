@@ -429,8 +429,7 @@ esp_err_t zv_cc1101_transmit(const zv_cc1101_capture_t *capture, uint16_t repeti
     if (capture == NULL || repetitions == 0)
         return ESP_ERR_INVALID_ARG;
 
-    if (capture->count == 0 || capture->count > CC1101_CAPTURE_MAX_DURATIONS ||
-        capture->count % 2 != 0)
+    if (capture->count == 0 || capture->count > CC1101_CAPTURE_MAX_DURATIONS)
         return ESP_ERR_INVALID_SIZE;
 
     size_t symbols_count = 0;
@@ -441,7 +440,8 @@ esp_err_t zv_cc1101_transmit(const zv_cc1101_capture_t *capture, uint16_t repeti
             return ESP_ERR_INVALID_SIZE;
 
         int32_t pulse0 = capture->durations_us[i];
-        int32_t pulse1 = capture->durations_us[i + 1];
+        bool has_second = i + 1 < capture->count;
+        int32_t pulse1 = has_second ? capture->durations_us[i + 1] : 0;
         uint32_t ticks0 = pulse0 < 0 ? (uint32_t)(-(int64_t)pulse0) : (uint32_t)pulse0;
         uint32_t ticks1 = pulse1 < 0 ? (uint32_t)(-(int64_t)pulse1) : (uint32_t)pulse1;
 
@@ -455,7 +455,7 @@ esp_err_t zv_cc1101_transmit(const zv_cc1101_capture_t *capture, uint16_t repeti
         * If the RMT resolution changes, pulse durations must be converted from microseconds to ticks before validation. 
         * The 32767-tick hardware limit remains unchanged, but the maximum representable time changes accordingly.
         */
-        if (ticks0 == 0 || ticks1 == 0 || ticks0 > CC1101_RMT_MAX_DURATION_TICKS || ticks1 > CC1101_RMT_MAX_DURATION_TICKS)
+        if (ticks0 == 0 || (has_second && ticks1 == 0) || ticks0 > CC1101_RMT_MAX_DURATION_TICKS || ticks1 > CC1101_RMT_MAX_DURATION_TICKS)
             return ESP_ERR_INVALID_ARG;
 
         rmt_symbol_word_t symbol = {

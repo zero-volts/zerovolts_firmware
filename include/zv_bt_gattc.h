@@ -3,6 +3,7 @@
 
 #include "esp_gattc_api.h"
 
+#include "zv_receiver_event.h"
 typedef struct {
     esp_bt_uuid_t uuid;
     uint16_t start_handle;
@@ -21,5 +22,6 @@ void zv_bt_gatt_open_connection(uint8_t *device_mac, int addr_type);
 void zv_bt_gatt_close_connection(void);
 
 void zv_bt_gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param);
+void zv_bt_gattc_set_event_receiver(zv_event_handler_t handler);
 
 #endif /* ZV_BT_GATTC_H */

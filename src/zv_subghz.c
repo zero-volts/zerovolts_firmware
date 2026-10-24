@@ -13,13 +13,7 @@
 #include "driver/spi_master.h"
 
 #include "zv_spi_bus.h"
-#include "zv_uart_commands.h"
 
-#include <inttypes.h>
-#include <stdio.h>
-
-#define DATA_CHUNK_MAX_VALUES 32
-#define DATA_CHUNK_LINE_SIZE  512
 
 static const char *TAG = "ZV_SUBGHZ";
 typedef struct {
@@ -28,6 +22,29 @@ typedef struct {
 } subghz_context;
 
 static subghz_context local_ctx;
+static zv_event_handler_t event_receiver;
+
+void zv_subghz_set_event_receiver(zv_event_handler_t handler)
+{
+    event_receiver = handler;
+}
+
+static void notify_capture_event(zv_event_type_t type, const char *reason, const zv_cc1101_capture_t *capture, uint64_t capture_id)
+{
+    if (event_receiver == NULL)
+        return;
+    
+    const zv_event_t event = {
+        .type = type,
+        .data.subghz_capture = {
+            .capture = capture,
+            .capture_id = capture_id,
+            .reason = reason,
+        },
+    };
+
+    event_receiver(&event, NULL);
+}
 
 static void zv_manual_reset(void)
 {
@@ -197,56 +214,6 @@ static bool capture_looks_like_noise(const zv_cc1101_capture_t *cap)
     return very_short > (cap->count / 3);
 }
 
-/**
- * Convert the pulses sending line by line as a chunks
- * example:
- *  SUBGHZ_CAPTURE:DATA|seq=0|chunks=8|count=32|timings=-10375,+254,...
- */
-static bool send_capture_chunks(const zv_cc1101_capture_t *cap, uint64_t capture_id)
-{
-    if (cap == NULL || cap->count == 0)
-        return false;
-
-    const uint16_t chunks_amount = (cap->count + DATA_CHUNK_MAX_VALUES - 1) / DATA_CHUNK_MAX_VALUES;
-    for (uint16_t seq = 0; seq < chunks_amount; seq++)
-    {
-        const uint16_t start = seq * DATA_CHUNK_MAX_VALUES;
-        uint16_t end = start + DATA_CHUNK_MAX_VALUES;
-        if (end > cap->count)
-            end = cap->count;
-
-        const uint16_t values_in_chunk = end - start;
-        char line[DATA_CHUNK_LINE_SIZE];
-
-        int written = snprintf(line, sizeof(line),
-                               "%s|capture_id=%" PRIu64 "|seq=%u|chunks=%u|count=%u|timings=",
-                               SUBGHZ_COMMAND_RES_CAPTURE_DATA,
-                               capture_id, seq, chunks_amount, values_in_chunk);
-
-        if (written < 0 || (size_t)written >= sizeof(line))
-            return false;
-
-        size_t offset = (size_t)written;
-        for (uint16_t index = start; index < end; index++)
-        {
-            const char *separator = (index == start) ? "" : ",";
-
-            written = snprintf(line + offset, sizeof(line) - offset,
-                               "%s%+" PRId32,
-                               separator, cap->durations_us[index]);
-
-            if (written < 0 || (size_t)written >= sizeof(line) - offset)
-                return false;
-
-            offset += (size_t)written;
-        }
-
-        zv_uart_send_line(line);
-    }
-
-    return true;
-}
-
 static void relase_capture_task()
 {
     local_ctx.is_capturing = false;
@@ -257,7 +224,8 @@ void subghz_listener_task(void *arg)
 {
     if (local_ctx.is_capturing)
     {
-        zv_uart_send_formatted_line("%s|reason=%s", SUBGHZ_COMMAND_RES_CAPTURE_FAIL, "busy");
+        vPortFree(arg);
+        notify_capture_event(ZV_EVENT_SUBGHZ_CAPTURE_FAILED, "busy", NULL, 0);
         vTaskDelete(NULL);
         return; 
     }
@@ -278,12 +246,12 @@ void subghz_listener_task(void *arg)
     const TickType_t started_at = xTaskGetTickCount();
 
     ESP_LOGI(TAG, "Waiting up to %d ms for a valid Sub-GHz signal...", data.time_frame);
-    zv_uart_send_line(SUBGHZ_COMMAND_RES_CAPTURE_START);
+    notify_capture_event(ZV_EVENT_SUBGHZ_CAPTURE_STARTED, NULL, NULL, 0);
 
     esp_err_t result = zv_cc1101_set_frequency(data.signal);
     if (result != ESP_OK) 
     {
-        zv_uart_send_formatted_line("%s|reason=%s", SUBGHZ_COMMAND_RES_CAPTURE_ERROR, "not supported frequency");
+        notify_capture_event(ZV_EVENT_SUBGHZ_CAPTURE_ERROR, "not supported frequency", NULL, 0);
         relase_capture_task();
         return; 
     }
@@ -306,7 +274,7 @@ void subghz_listener_task(void *arg)
         if (result != ESP_OK)
         {
             ESP_LOGE(TAG, "Sub-GHz capture failed: %s", esp_err_to_name(result));
-            zv_uart_send_formatted_line("%s|reason=%s", SUBGHZ_COMMAND_RES_CAPTURE_FAIL, esp_err_to_name(result));
+            notify_capture_event(ZV_EVENT_SUBGHZ_CAPTURE_FAILED, esp_err_to_name(result), NULL, 0);
 
             relase_capture_task();
             return;
@@ -320,66 +288,25 @@ void subghz_listener_task(void *arg)
 
         ESP_LOGI(TAG, "Sub-GHz signal captured: %u pulse durations at %lu Hz", cap.count, (unsigned long)cap.freq_hz);
         uint64_t capture_id = (uint64_t)esp_timer_get_time();
-        if (!send_capture_chunks(&cap, capture_id))
-        {
-            ESP_LOGE(TAG, "Sub-GHz capture could not be serialized into UART chunks");
-            zv_uart_send_formatted_line("%s|reason=serialization", SUBGHZ_COMMAND_RES_CAPTURE_FAIL);
+        notify_capture_event(ZV_EVENT_SUBGHZ_CAPTURE_DONE, NULL, &cap, capture_id);
 
-            relase_capture_task();
-            return;
-        }
-
-        const uint16_t chunks_amount = (cap.count + DATA_CHUNK_MAX_VALUES - 1) / DATA_CHUNK_MAX_VALUES;
-        zv_uart_send_formatted_line("%s|capture_id=%" PRIu64 "|freq=%lu|count=%u|chunks=%u|buffer_full=%u",
-                                    SUBGHZ_COMMAND_RES_CAPTURE_DONE, capture_id, (unsigned long)cap.freq_hz,
-                                    cap.count, chunks_amount, cap.count == CC1101_CAPTURE_MAX_DURATIONS);
-        
         relase_capture_task();
         return;
     }
 
     ESP_LOGI(TAG, "Sub-GHz capture timed out: no valid signal was received");
-    zv_uart_send_formatted_line("%s|reason=timeout", SUBGHZ_COMMAND_RES_CAPTURE_FAIL);
+    notify_capture_event(ZV_EVENT_SUBGHZ_CAPTURE_FAILED, "timeout", NULL, 0);
     relase_capture_task();
 }
 
-esp_err_t zv_subghz_transmit(void)
+esp_err_t zv_subghz_transmit(const zv_cc1101_capture_t *capture, uint16_t repetitions)
 {
-    // TODO: Hardcodeado para probar el timbre, debe obtener lugo desde parametro!
-    static const zv_cc1101_capture_t capture = {
-        .freq_hz = 433920000,
-        .count = 250,
-        .durations_us = {
-            -10347, +322, -998, +328, -1022, +1007, -312, +999, -358, +320, -987, +353, -982,
-            +1005, -335, +352, -979, +349, -985, +339, -1012, +1001, -327, +329, -1012, +344,
-            -983, +347, -988, +327, -998, +1029, -324, +1009, -330, +322, -1012, +1004, -325,
-            +331, -1004, +996, -328, +348, -1002, +330, -998, +323, -997, +356,
+    if (capture == NULL || repetitions == 0)
+        return ESP_ERR_INVALID_ARG;
 
-            -10319, +340, -1014, +325, -1011, +1003, -325, +1004, -344, +307, -1005, +339,
-            -1011, +1002, -331, +330, -1000, +329, -1004, +325, -1003, +1016, -327, +324,
-            -1024, +303, -1026, +323, -995, +330, -1022, +980, -338, +1001, -346, +339, -982,
-            +999, -358, +308, -1025, +999, -331, +329, -1014, +324, -1006, +326, -1003, +334,
-
-            -10342, +330, -1008, +314, -1023, +982, -325, +1027, -327, +329, -1005, +346,
-            -981, +1001, -331, +333, -1014, +328, -1008, +338, -1000, +984, -329, +353, -985,
-            +352, -988, +349, -981, +346, -994, +1009, -330, +1007, -317, +335, -1006, +1016,
-            -326, +327, -1012, +1006, -306, +353, -1006, +325, -1011, +316, -1011, +323,
-
-            -10340, +347, -1009, +316, -1012, +1000, -328, +1011, -314, +345, -1008, +314,
-            -1025, +984, -329, +355, -987, +326, -1011, +346, -980, +1025, -332, +308, -1014,
-            +328, -1008, +337, -1002, +333, -988, +1006, -349, +982, -349, +323, -1004, +1000,
-            -330, +341, -999, +999, -331, +330, -1015, +326, -1009, +314, -1024, +332,
-
-            -10317, +354, -1005, +315, -1022, +1009, -301, +1028, -327, +330, -986, +340,
-            -1010, +999, -329, +329, -1012, +345, -981, +348, -1002, +1009, -302, +352, -983,
-            +353, -989, +349, -982, +345, -995, +1008, -331, +1006, -345, +308, -1004, +1017,
-            -328, +326, -1012, +1006, -307, +353, -1010, +307, -1008, +338, -1011, +323,
-        },
-    };
-
-    esp_err_t result = zv_cc1101_set_frequency(capture.freq_hz);
+    esp_err_t result = zv_cc1101_set_frequency(capture->freq_hz);
     if (result == ESP_OK)
-        result = zv_cc1101_transmit(&capture, 20);
+        result = zv_cc1101_transmit(capture, repetitions);
 
     if (result != ESP_OK)
         ESP_LOGE(TAG, "Sub-GHz transmission failed: %s", esp_err_to_name(result));
