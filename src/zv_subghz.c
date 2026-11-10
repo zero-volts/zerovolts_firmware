@@ -301,6 +301,9 @@ void subghz_listener_task(void *arg)
 
 esp_err_t zv_subghz_transmit(const zv_cc1101_capture_t *capture, uint16_t repetitions)
 {
+    if (local_ctx.is_capturing)
+        return ESP_ERR_INVALID_STATE;
+
     if (capture == NULL || repetitions == 0)
         return ESP_ERR_INVALID_ARG;
 

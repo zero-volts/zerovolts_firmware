@@ -3,16 +3,23 @@
 #include "esp_rom_sys.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_timer.h"
+#include "freertos/task.h"
 #include "driver/rmt_rx.h"
 #include "driver/rmt_tx.h"
 #include "freertos/queue.h"
 
-#define CC1101_RMT_SYMBOL_COUNT     128
-#define CC1101_RMT_MAX_DURATION_TICKS 32767U
-#define FREQ_433_HZ                 433920000
-#define CC1101_RX_WAIT_MAX_ATTEMPTS 100
-#define CC1101_RX_WAIT_INTERVAL_US  100
-#define CC1101_RESOLUTION_HZ        1 * 1000 * 1000    // 1 MHz = 1 µs/tick
+#define FREQ_433_HZ                         433920000
+#define CC1101_CRYSTAL_FRECUENCY_HZ         26000000ULL
+#define CC1101_RESOLUTION_HZ                1 * 1000 * 1000    // 1 MHz = 1 µs/tick
+#define CC1101_RMT_SYMBOL_COUNT             128
+#define CC1101_CAL_MAX_ATTEMPTS             3
+#define CC1101_RMT_MAX_DURATION_TICKS       32767U
+#define CC1101_RX_WAIT_MAX_ATTEMPTS         100
+#define CC1101_RX_WAIT_INTERVAL_US          100
+#define CC1101_ANALYZER_CONFIRM_SWEEPS       2U
+#define CC1101_ANALYZER_RELEASE_SWEEPS       2U
+#define CC1101_ANALYZER_MATCH_HZ             200000U
 
 static const char *TAG = "ZV_CC1101";
 
@@ -24,6 +31,7 @@ typedef struct {
     rmt_channel_handle_t tx_chan_handle;
     rmt_encoder_handle_t encoder_handle;
     uint32_t frequency;
+    bool frequency_valid;
 } cc1101_states_ctx;
 
 typedef struct {
@@ -32,7 +40,32 @@ typedef struct {
     uint8_t value;
 } cc1101_register_config_t;
 
-static cc1101_states_ctx context;
+typedef struct {
+    zv_cc1101_modulation type;
+    uint8_t value;
+} cc1101_modulation_t;
+
+// TODO: revisar smartRFStudio para tener valores correctos
+static const cc1101_modulation_t default_modulations[] = {
+    { OOK_ASK, 0x30 },
+    { FSK, 0x00 },
+    { GFSK, 0x10 }
+};
+
+typedef struct {
+    uint32_t frequency_hz;
+    uint8_t test0;
+    uint8_t fscal2;
+} cc1101_tuning_profile_t;
+
+static const cc1101_tuning_profile_t tuning_profiles[] = {
+    { 315000000U, 0x0B, 0x0A },
+    { 380000000U, 0x0B, 0x0A },
+    { 381000000U, 0x0B, 0x0A },
+    { 433920000U, 0x09, 0x2A },
+    { 868000000U, 0x09, 0x2A },
+    { 915000000U, 0x09, 0x2A },
+};
 
 /*
  * This setup turns the CC1101 into a simple 433.92 MHz OOK receiver.
@@ -44,23 +77,25 @@ static const cc1101_register_config_t cc1101_base_config[] = {
     { "IOCFG0",   0x02, 0x0D }, // GDO0 outputs the raw demodulated data
     { "FIFOTHR",  0x03, 0x47 },
     { "PKTCTRL0", 0x08, 0x32 }, // asynchronous serial mode; no packet framing
-    { "FREQ2",    0x0D, 0x10 }, // the three FREQ registers tune the radio to 433.92 MHz
-    { "FREQ1",    0x0E, 0xB0 },
-    { "FREQ0",    0x0F, 0x71 },
-    { "MDMCFG4",  0x10, 0x67 }, // receiver bandwidth is about 270 kHz
+    { "FREQ2",    CC1101_FREQ2_ADDRESS, 0x10 }, // the three FREQ registers tune the radio to 433.92 MHz
+    { "FREQ1",    CC1101_FREQ1_ADDRESS, 0xB0 },
+    { "FREQ0",    CC1101_FREQ0_ADDRESS, 0x71 },
+    { "MDMCFG4",  CC1101_MDMCFG4_ADDRESS, 0x67 }, // receiver bandwidth is about 270 kHz
     { "MDMCFG3",  0x11, 0x83 },
-    { "MDMCFG2",  0x12, 0x30 }, // ASK/OOK modulation, with sync-word detection disabled
+    { "MDMCFG2",  CC1101_MDMCFG2_ADDRESS, 0x30 }, // ASK/OOK modulation, with sync-word detection disabled
     { "MCSM0",    0x18, 0x18 },
-    { "FOCCFG",   0x19, 0x16 },
+    { "FOCCFG",   0x19, 0x14 }, // ASK/OOK requires FOC_LIMIT=0
     { "AGCCTRL2", 0x1B, 0x03 },
     { "AGCCTRL1", 0x1C, 0x40 },
     { "AGCCTRL0", 0x1D, 0x91 },
     { "FREND0",   0x22, 0x11 }, // 0x11 = 0001 0001 - OOK/ASK
-    { "FSCAL2",   0x24, 0x2A }, // Select the high VCO for 433.92 MHz with TEST0=0x09
+    { "FSCAL2",   CC1101_FSCAL2_ADDRESS, 0x2A }, // Select the high VCO for 433.92 MHz with TEST0=0x09
     { "TEST2",    0x2C, 0x81 },
     { "TEST1",    0x2D, 0x35 },
     { "TEST0",    0x2E, 0x09 },
 };
+
+static cc1101_states_ctx context;
 
 static int32_t sing_by_level (uint16_t level, uint16_t duration)
 {
@@ -69,20 +104,43 @@ static int32_t sing_by_level (uint16_t level, uint16_t duration)
 
 static esp_err_t zv_cc1101_start_rx(void)
 {
-    // SIDLE stops the current radio operation
+    if (!context.frequency_valid)
+        return ESP_ERR_INVALID_STATE;
+
     esp_err_t result = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
     if (result != ESP_OK)
         return result;
 
-    result = zv_cc1101_send_strobe(CC1101_STROBE_SFRX); // SFRX clears stale RX data
+    result = zv_cc1101_wait_for_marc_state(CC1101_MARCSTATE_SIDLE);
     if (result != ESP_OK)
         return result;
 
-    result = zv_cc1101_send_strobe(CC1101_STROBE_SRX); // SRX starts reception
+    result = zv_cc1101_send_strobe(CC1101_STROBE_SFRX);
     if (result != ESP_OK)
         return result;
 
-    return ESP_OK;
+    result = zv_cc1101_send_strobe(CC1101_STROBE_SRX);
+    if (result != ESP_OK)
+        return result;
+
+    result = zv_cc1101_wait_for_marc_state(CC1101_MARCSTATE_RX);
+    if (result != ESP_OK)
+        return result; 
+
+    uint8_t fscal1 = 0;
+    if (result == ESP_OK)
+        result = zv_cc1101_read_config_register(CC1101_FSCAL1_ADDRESS, &fscal1);
+
+    if (result == ESP_OK && (fscal1 & 0x3F) == 0x3F)
+        result = ESP_ERR_INVALID_RESPONSE;
+
+    if (result != ESP_OK)
+    {
+        context.frequency_valid = false;
+        zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
+    }
+
+    return result;
 }
 
 static esp_err_t zv_cc1101_read_register(uint8_t address, uint8_t burst, uint8_t *output_value)
@@ -306,6 +364,7 @@ esp_err_t zv_cc1101_write_config_register(uint8_t address, uint8_t value)
 
 esp_err_t zv_cc1101_config_and_verify()
 {
+    context.frequency_valid = false;
     size_t config_length = sizeof(cc1101_base_config) / sizeof((cc1101_base_config)[0]);
     for (size_t i= 0; i < config_length; i++)
     {
@@ -323,6 +382,9 @@ esp_err_t zv_cc1101_config_and_verify()
         if (reg_value.value != new_value)
             return ESP_ERR_INVALID_RESPONSE;
     }
+
+    context.frequency = FREQ_433_HZ;
+    context.frequency_valid = true;
 
     return ESP_OK;
 }
@@ -350,8 +412,21 @@ esp_err_t zv_cc1101_get_rssi_dbm(int8_t *rssi_dbm)
     if (rssi_dbm == NULL)
         return ESP_ERR_INVALID_ARG;
 
+    if (!context.frequency_valid)
+        return ESP_ERR_INVALID_STATE;
+
+    uint8_t state;
+    esp_err_t res = zv_cc1101_read_status_register(CC1101_STATUS_MARCSTATE, &state);
+    if (res != ESP_OK)
+        return res;
+
+    if ((state & 0x1F) != CC1101_MARCSTATE_RX)
+        return ESP_ERR_INVALID_STATE;
+
+    esp_rom_delay_us(3000);
+
     uint8_t raw;
-    esp_err_t res =zv_cc1101_read_status_register(CC1101_STATUS_RSSI, &raw);
+    res = zv_cc1101_read_status_register(CC1101_STATUS_RSSI, &raw);
     if (res != ESP_OK)
         return res;
 
@@ -362,7 +437,10 @@ esp_err_t zv_cc1101_get_rssi_dbm(int8_t *rssi_dbm)
      */
     int8_t r = (int8_t)((raw >= 128) ? (int)raw - 256 : raw);
 
-    *rssi_dbm = (r / 2) - 74;   /* offset = 74 dBm para 433 MHz */
+    int16_t dbm = (r / 2) - 74;
+    // Preserve the public int8_t API without wrapping weak readings positive.
+    *rssi_dbm = dbm < INT8_MIN ? INT8_MIN : (int8_t)dbm;
+
     return ESP_OK;
 }
 
@@ -372,6 +450,9 @@ esp_err_t zv_cc1101_init(spi_device_handle_t handle)
         return ESP_ERR_INVALID_ARG;
 
     context.cc_device_handle = handle;
+    context.frequency = 0;
+    context.frequency_valid = false;
+
     return ESP_OK;
 }
 
@@ -399,20 +480,152 @@ esp_err_t zv_cc1101_wait_for_marc_state(uint8_t waiting_state)
     return ESP_ERR_TIMEOUT;
 }
 
-esp_err_t zv_cc1101_set_frequency(uint32_t frequency)
+esp_err_t zv_cc1101_set_modulation(zv_cc1101_modulation new_modulation)
 {
-    // TODO: falta implementar que al cambiar de frecuencia deberian actualizarse los registros 
-    // los campos de cc1101_base_config tales como "FREQ2/FREQ1/FREQ0" deberian ser cambiados para
-    // la frecuencia seleccionada.
-    if (frequency != FREQ_433_HZ)
+    uint8_t modulation_value = 0;
+    size_t modulation_amount = sizeof (default_modulations) / sizeof (default_modulations[0]);
+    for (size_t i = 0; i < modulation_amount; i++)
     {
-        ESP_LOGW(TAG, "For now only supported the 433.92 frequency!");
-        return ESP_ERR_NOT_SUPPORTED;
+        if (default_modulations[i].type == new_modulation)
+        {
+            modulation_value = default_modulations[i].value;
+            break;
+        }
     }
 
-    context.frequency = frequency;
+    esp_err_t success = zv_cc1101_write_config_register(CC1101_MDMCFG2_ADDRESS, modulation_value);
+    if (success != ESP_OK)
+        return success;
+
     return ESP_OK;
 }
+
+esp_err_t zv_cc1101_set_fine_tuning(uint32_t freq_hz)
+{
+    // by default is 433 frecuency
+    cc1101_tuning_profile_t profile = {
+        .frequency_hz = FREQ_433_HZ,
+        .fscal2 = tuning_profiles[3].fscal2,
+        .test0 = tuning_profiles[3].test0
+    };
+
+    size_t tuning_length = sizeof(tuning_profiles) / sizeof(tuning_profiles[0]);
+    for (size_t i = 0; i < tuning_length; i++)
+    {
+        if (freq_hz == tuning_profiles[i].frequency_hz)
+        {
+            profile = tuning_profiles[i];
+            break;
+        }
+    }
+
+    // TODO: Esto es esta para validar, estas frecuencias el datahsheet dice que estan fuera del rango del modulo
+    // Son valores para probar que funcionan.
+    if (freq_hz >= 380000000U && freq_hz <= 381000000U)
+    {
+        esp_err_t result_wr = zv_cc1101_write_config_register(CC1101_MDMCFG4_ADDRESS, 0x57);
+        if (result_wr != ESP_OK)
+            return result_wr;
+
+        uint8_t new_value;
+        result_wr = zv_cc1101_read_config_register(CC1101_MDMCFG4_ADDRESS, &new_value);
+        if (result_wr != ESP_OK)
+            return result_wr;
+
+        if (0x57 != new_value)
+            return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t zv_cc1101_set_frequency(uint32_t freq_hz)
+{
+    if (context.cc_device_handle == NULL)
+        return ESP_ERR_INVALID_STATE;
+
+    context.frequency_valid = false;
+
+    // f_base = (f_xosc / 2^16) * FREQ
+    // Referencia: CC1101 datasheet, revision I, pagina 75,
+    // seccion 29.1, registro 0x0D: FREQ2
+    uint32_t word = (uint32_t)((((uint64_t)freq_hz << 16) + CC1101_CRYSTAL_FRECUENCY_HZ / 2) / CC1101_CRYSTAL_FRECUENCY_HZ);
+
+    cc1101_register_config_t reg_value[] = {
+        { "FREQ2", CC1101_FREQ2_ADDRESS, (uint8_t)(word >> 16) },
+        { "FREQ1", CC1101_FREQ1_ADDRESS, (uint8_t)(word >> 8) },
+        { "FREQ0", CC1101_FREQ0_ADDRESS, (uint8_t)word },
+    };
+
+    esp_err_t result = zv_cc1101_send_strobe(CC1101_STROBE_SIDLE);
+    if (result != ESP_OK)
+        return result;
+
+    result = zv_cc1101_wait_for_marc_state(CC1101_MARCSTATE_SIDLE);
+    if (result != ESP_OK)
+        return result;
+
+    size_t registers_length = sizeof (reg_value) / sizeof(reg_value[0]);
+    for (size_t i = 0; i < registers_length; i++)
+    {
+        esp_err_t result_wr = zv_cc1101_write_config_register(reg_value[i].address, reg_value[i].value);
+        if (result_wr != ESP_OK)
+            return result_wr;
+
+        uint8_t new_value;
+        result_wr = zv_cc1101_read_config_register(reg_value[i].address, &new_value);
+        if (result_wr != ESP_OK)
+            return result_wr;
+
+        if (reg_value[i].value != new_value)
+            return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    context.frequency = freq_hz;
+    context.frequency_valid = true;
+
+    return ESP_OK;
+}
+
+esp_err_t zv_cc1101_frecuency_analyzer(void)
+{
+    // TODO: valores de prueba solo haciendo barrido de frecuencias en 433 mhz
+    uint32_t start_hz = 433000000U;
+    uint32_t end_hz = 435000000U;
+    uint32_t step_hz = 100000U;
+    uint32_t duration_ms = 15000U;
+    // int8_t threshold_dbm = -70;
+
+    if (step_hz == 0 || start_hz > end_hz || duration_ms == 0)
+        return ESP_ERR_INVALID_ARG;
+
+    if (context.cc_device_handle == NULL || !context.frequency_valid)
+        return ESP_ERR_INVALID_STATE;
+  
+    esp_err_t result = ESP_OK;
+    while (result == ESP_OK )
+    {
+        uint64_t frequency;
+        for (frequency = start_hz; frequency <= end_hz; frequency += step_hz)
+        {
+            //TODO:
+            // 1.- hacer set de la nueva frecuencia
+            // 2.- comenzar a escuchar rx
+            // 3.- leer valor de rssi
+            // 4.- encontrar el valor de rssi mas alto y dejarlo como frecuencia encontrada.
+        }
+
+        if (result != ESP_OK || frequency <= end_hz)
+            break;
+
+        vTaskDelay(1);
+    }
+
+    // TODO: valver a la frecuencia inicial y dejar en escucha el modulo
+
+    return ESP_OK;
+}
+
 
 static esp_err_t zv_cc1101_finish_transmission (esp_err_t error)
 {
@@ -428,6 +641,9 @@ esp_err_t zv_cc1101_transmit(const zv_cc1101_capture_t *capture, uint16_t repeti
 {
     if (capture == NULL || repetitions == 0)
         return ESP_ERR_INVALID_ARG;
+
+    if (!context.frequency_valid || capture->freq_hz != context.frequency)
+        return ESP_ERR_INVALID_STATE;
 
     if (capture->count == 0 || capture->count > CC1101_CAPTURE_MAX_DURATIONS)
         return ESP_ERR_INVALID_SIZE;
@@ -611,7 +827,7 @@ esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms)
         return ESP_ERR_TIMEOUT;
     }
 
-    out->freq_hz = context.frequency > 0 ? context.frequency : FREQ_433_HZ;
+    out->freq_hz = context.frequency;
     // One RMT symbol holds two consecutive logic levels. Store both as signed pulse lengths:
     //  - positive means HIGH and negative means LOW.
     // This keeps the waveform ordering without needing a separate level array.
@@ -641,4 +857,6 @@ void zv_cc1101_deinit(void)
     zv_cc1101_rmt_tx_cleanup();
 
     context.cc_device_handle = NULL;
+    context.frequency = 0;
+    context.frequency_valid = false;
 }

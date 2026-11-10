@@ -20,12 +20,13 @@
 #define CC1101_STROBE_STX               0x35    // In IDLE state: Enable TX
 #define CC1101_STROBE_SIDLE             0x36
 #define CC1101_STROBE_SFRX              0x3A
+#define CC1101_STROBE_SCAL              0x33    // Calibrate frequency synthesizer and turn it off.
 
 /* Status registers */
 #define CC1101_STATUS_PARTNUM           0x30
 #define CC1101_STATUS_VERSION           0x31
-#define CC1101_STATUS_RSSI             0x34
-#define CC1101_STATUS_MARCSTATE        0x35
+#define CC1101_STATUS_RSSI              0x34
+#define CC1101_STATUS_MARCSTATE         0x35
 
 /* MARCSTATE values */
 #define CC1101_MARCSTATE_RX             0x0D
@@ -33,6 +34,13 @@
 #define CC1101_MARCSTATE_SIDLE          0x01
 
 #define CC1101_PATABLE_ADDRESS          0X3E
+#define CC1101_FSCAL1_ADDRESS           0x25
+#define CC1101_FSCAL2_ADDRESS           0x24
+#define CC1101_MDMCFG2_ADDRESS          0x12
+#define CC1101_MDMCFG4_ADDRESS          0x10
+#define CC1101_FREQ0_ADDRESS            0x0F
+#define CC1101_FREQ1_ADDRESS            0x0E
+#define CC1101_FREQ2_ADDRESS            0x0D
 
 #define ZV_SUB_GHZ_PIN_GDO0     27
 #define ZV_SUB_GHZ_PIN_GDO2     26
@@ -43,6 +51,12 @@ typedef struct {
     uint16_t count;
     uint32_t freq_hz;
 } zv_cc1101_capture_t;
+
+typedef enum {
+    OOK_ASK,
+    FSK,
+    GFSK
+} zv_cc1101_modulation;
 
 esp_err_t zv_cc1101_init(spi_device_handle_t handle);
 
@@ -71,11 +85,12 @@ esp_err_t zv_cc1101_write_config_register(uint8_t address, uint8_t value);
 esp_err_t zv_cc1101_config_and_verify();
 esp_err_t zv_cc1101_wait_for_marc_state(uint8_t waiting_state);
 esp_err_t zv_cc1101_set_frequency(uint32_t frequency);
-
+esp_err_t zv_cc1101_set_fine_tuning(uint32_t freq_hz);
+esp_err_t zv_cc1101_set_modulation(zv_cc1101_modulation new_modulation);
+esp_err_t zv_cc1101_frecuency_analyzer(void);
 esp_err_t zv_cc1101_read_partnum(uint8_t *output_value);
 esp_err_t zv_cc1101_read_version(uint8_t *output_value);
 esp_err_t zv_cc1101_get_rssi_dbm(int8_t *rssi_dbm);
-
 esp_err_t zv_cc1101_capture(zv_cc1101_capture_t *out, uint32_t timeout_ms);
 esp_err_t zv_cc1101_transmit(const zv_cc1101_capture_t *capture, uint16_t repetitions);
 void zv_cc1101_deinit(void);
