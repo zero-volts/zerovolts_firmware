@@ -12,7 +12,7 @@
 #include "esp_bt_main.h"
 #include "esp_gatt_common_api.h"
 
-#include "zv_uart_commands.h"
+#include "zv_com_protocol.h"
 #include "zv_uart_protocol.h"
 
 static const char *TAG = "ZEROVOLTS_FIRMWARE";
@@ -49,16 +49,16 @@ void app_main(void)
     ESP_LOGI(TAG, "========================================");
 
     if (zv_uart_is_ready())
-        zv_uart_send_line("READY");
+        zv_uart_send_line(ZV_COM_RES_READY);
 
     esp_err_t subghz_result = zv_subghz_init();
     if (subghz_result == ESP_OK)
     {
-       zv_uart_send_formatted_line("%s:SUCCESS", SUBGHZ_COMMAND_RES_CHECK_MODULE);
+        zv_uart_send_line(ZV_COM_RES_SUBGHZ_CHECK_MODULE_OK);
     }
     else
     {
-        zv_uart_send_formatted_line("%s:FAILS", SUBGHZ_COMMAND_RES_CHECK_MODULE);
+        zv_uart_send_line(ZV_COM_RES_SUBGHZ_CHECK_MODULE_FAIL);
         ESP_LOGE(TAG, "CC1101 initialization failed: %s. Check the SPI wiring and radio power",
                  esp_err_to_name(subghz_result));
     }

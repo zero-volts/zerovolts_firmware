@@ -1,0 +1,1187 @@
+{
+  "firmware_version": "0.1.0",
+  "field_sets": {
+    "help_params": [
+      {
+        "name": "command",
+        "type": "string",
+        "description": "Exact registered command token",
+        "attributes": {
+          "required": 0,
+          "encoding": "key_value",
+          "exclusive_with": "message"
+        }
+      },
+      {
+        "name": "message",
+        "type": "string",
+        "description": "Exact response token; omit both selectors to list commands",
+        "attributes": {
+          "required": 0,
+          "encoding": "key_value",
+          "exclusive_with": "command"
+        }
+      }
+    ],
+    "connect_params": [
+      {
+        "name": "mac",
+        "type": "mac",
+        "description": "BLE address from BLE_SCAN:DEVICE",
+        "attributes": {
+          "required": 1,
+          "position": 1,
+          "encoding": "positional"
+        }
+      },
+      {
+        "name": "addr_type",
+        "type": "u8",
+        "description": "Use addr_type from the scan result; the current handler converts with atoi",
+        "attributes": {
+          "required": 1,
+          "position": 2,
+          "encoding": "positional"
+        }
+      }
+    ],
+    "capture_params": [
+      {
+        "name": "freq_hz",
+        "type": "u32",
+        "description": "Requested frequency; checked by the radio driver",
+        "attributes": {
+          "required": 1,
+          "position": 1,
+          "encoding": "key_value",
+          "unit": "Hz"
+        }
+      },
+      {
+        "name": "timeout_ms",
+        "type": "u32",
+        "description": "Capture window; current handler converts with strtoul without range validation",
+        "attributes": {
+          "required": 1,
+          "position": 2,
+          "encoding": "key_value",
+          "unit": "ms"
+        }
+      }
+    ],
+    "begin_params": [
+      {
+        "name": "id",
+        "type": "u32",
+        "description": "Client transfer identifier",
+        "attributes": {
+          "required": 1,
+          "encoding": "key_value",
+          "min": 1
+        }
+      },
+      {
+        "name": "freq_hz",
+        "type": "u32",
+        "description": "Frequency applied when END transmits",
+        "attributes": {
+          "required": 1,
+          "encoding": "key_value",
+          "unit": "Hz"
+        }
+      },
+      {
+        "name": "repeats",
+        "type": "u32",
+        "description": "Number of transmissions",
+        "attributes": {
+          "required": 1,
+          "encoding": "key_value",
+          "min": 1,
+          "max": 50
+        }
+      },
+      {
+        "name": "count",
+        "type": "u32",
+        "description": "Total pulse durations across all blocks",
+        "attributes": {
+          "required": 1,
+          "encoding": "key_value",
+          "min": 1,
+          "max": 256
+        }
+      },
+      {
+        "name": "chunks",
+        "type": "u32",
+        "description": "Total blocks; must equal ceil(count / 16)",
+        "attributes": {
+          "required": 1,
+          "encoding": "key_value",
+          "constraint": "ceil_count_div_16"
+        }
+      }
+    ],
+    "data_params": [
+      {
+        "name": "id",
+        "type": "u32",
+        "description": "Same identifier as the accepted BEGIN",
+        "attributes": {
+          "required": 1,
+          "encoding": "key_value",
+          "min": 1,
+          "constraint": "active_transfer_id"
+        }
+      },
+      {
+        "name": "seq",
+        "type": "u32",
+        "description": "Block index starting at zero; strictly sequential",
+        "attributes": {
+          "required": 1,
+          "encoding": "key_value",
+          "min": 0,
+          "constraint": "next_sequence"
+        }
+      },
+      {
+        "name": "count",
+        "type": "u32",
+        "description": "16 values per block except the final remainder",
+        "attributes": {
+          "required": 1,
+          "encoding": "key_value",
+          "min": 1,
+          "max": 16,
+          "constraint": "min_16_remaining"
+        }
+      },
+      {
+        "name": "timings",
+        "type": "list_i32",
+        "description": "Positive is HIGH and negative is LOW; count must match the list length",
+        "attributes": {
+          "required": 1,
+          "encoding": "key_value",
+          "unit": "us",
+          "separator": "comma",
+          "item_min": -32767,
+          "item_max": 32767,
+          "item_nonzero": 1,
+          "length_field": "count"
+        }
+      }
+    ],
+    "end_params": [
+      {
+        "name": "id",
+        "type": "u32",
+        "description": "Same transfer identifier; all blocks must already be acknowledged",
+        "attributes": {
+          "required": 1,
+          "encoding": "key_value",
+          "min": 1,
+          "constraint": "complete_active_transfer_id"
+        }
+      }
+    ],
+    "version_fields": [
+      {
+        "name": "firmware",
+        "type": "string",
+        "description": "Firmware release version",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "name_fields": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "Exact UART command token",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "command_fields": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "Exact registered command token",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "description",
+        "type": "string",
+        "description": "Present when describing one command",
+        "attributes": {
+          "required": 0
+        }
+      }
+    ],
+    "metadata_fields": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "Field or parameter name",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "type",
+        "type": "string",
+        "description": "string or mac or bool or u8 or u16 or u32 or u64 or i32 or i64 or list_i32",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "description",
+        "type": "string",
+        "description": "Human readable explanation",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "required",
+        "type": "bool",
+        "description": "Whether this field or parameter must be present",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "position",
+        "type": "u32",
+        "description": "One-based position when the parser requires an order",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "encoding",
+        "type": "string",
+        "description": "key_value or positional or hex",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "unit",
+        "type": "string",
+        "description": "Hz or ms or us or dBm",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "min",
+        "type": "i64",
+        "description": "Minimum scalar value",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "max",
+        "type": "i64",
+        "description": "Maximum scalar value",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "max_bytes",
+        "type": "u32",
+        "description": "Maximum text length in bytes",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "exclusive_with",
+        "type": "string",
+        "description": "Mutually exclusive selector name",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "constraint",
+        "type": "string",
+        "description": "Cross-field relation identifier; see the command notes",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "separator",
+        "type": "string",
+        "description": "comma for numeric lists",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "item_min",
+        "type": "i32",
+        "description": "Minimum list element",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "item_max",
+        "type": "i32",
+        "description": "Maximum list element",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "item_nonzero",
+        "type": "bool",
+        "description": "List elements must be nonzero",
+        "attributes": {
+          "required": 0
+        }
+      },
+      {
+        "name": "length_field",
+        "type": "string",
+        "description": "Parameter or field holding the required list length",
+        "attributes": {
+          "required": 0
+        }
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "Exact response token; inspect it with HELP message selector",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "ends_operation",
+        "type": "bool",
+        "description": "One ends the selected request or operation; zero means more messages may follow",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "message_fields": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "Exact response token",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "description",
+        "type": "string",
+        "description": "Message purpose",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "note_fields": [
+      {
+        "name": "description",
+        "type": "string",
+        "description": "Ordering requirements and implementation caveats",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "help_error_fields": [
+      {
+        "name": "reason",
+        "type": "string",
+        "description": "unknown_command or unknown_message or invalid_arguments or catalog_unavailable or catalog_invalid",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "scan_fields": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "Advertised device name; may be empty",
+        "attributes": {
+          "required": 1,
+          "max_bytes": 48
+        }
+      },
+      {
+        "name": "mac",
+        "type": "mac",
+        "description": "BLE device address",
+        "attributes": {
+          "required": 1,
+          "max_bytes": 17
+        }
+      },
+      {
+        "name": "rssi",
+        "type": "i32",
+        "description": "Received signal strength",
+        "attributes": {
+          "required": 1,
+          "unit": "dBm"
+        }
+      },
+      {
+        "name": "manufacturer",
+        "type": "string",
+        "description": "Manufacturer label; may be empty",
+        "attributes": {
+          "required": 1,
+          "max_bytes": 48
+        }
+      },
+      {
+        "name": "service",
+        "type": "string",
+        "description": "Advertised service data; may be empty",
+        "attributes": {
+          "required": 1,
+          "max_bytes": 32
+        }
+      },
+      {
+        "name": "appearance",
+        "type": "string",
+        "description": "Appearance label; may be empty",
+        "attributes": {
+          "required": 1,
+          "max_bytes": 32
+        }
+      },
+      {
+        "name": "connectable",
+        "type": "bool",
+        "description": "One if the advertisement allows connection",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "addr_type",
+        "type": "u8",
+        "description": "Address type to reuse in BLE_CONNECT",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "connected_fields": [
+      {
+        "name": "mac",
+        "type": "mac",
+        "description": "Connected device address",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "mtu",
+        "type": "u16",
+        "description": "Negotiated ATT MTU in bytes",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "connection_reason_fields": [
+      {
+        "name": "mac",
+        "type": "mac",
+        "description": "Device address",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "reason",
+        "type": "i32",
+        "description": "BLE stack reason code",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "mac_fields": [
+      {
+        "name": "mac",
+        "type": "mac",
+        "description": "Disconnected device address",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "service_fields": [
+      {
+        "name": "svc",
+        "type": "i32",
+        "description": "Service index",
+        "attributes": {
+          "required": 1,
+          "min": 1
+        }
+      },
+      {
+        "name": "uuid",
+        "type": "string",
+        "description": "Service UUID",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "char_fields": [
+      {
+        "name": "svc",
+        "type": "i32",
+        "description": "Parent service index",
+        "attributes": {
+          "required": 1,
+          "min": 1
+        }
+      },
+      {
+        "name": "char",
+        "type": "i32",
+        "description": "Characteristic index",
+        "attributes": {
+          "required": 1,
+          "min": 1
+        }
+      },
+      {
+        "name": "uuid",
+        "type": "string",
+        "description": "Characteristic UUID",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "props",
+        "type": "u8",
+        "description": "GATT property bitmask",
+        "attributes": {
+          "required": 1,
+          "encoding": "hex"
+        }
+      },
+      {
+        "name": "handle",
+        "type": "u16",
+        "description": "GATT attribute handle",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "discovery_done_fields": [
+      {
+        "name": "services",
+        "type": "u32",
+        "description": "Number of discovered services",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "chars",
+        "type": "u32",
+        "description": "Sum of readable writable and notify categories; may count a characteristic more than once",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "ble_reason_fields": [
+      {
+        "name": "reason",
+        "type": "i32",
+        "description": "BLE stack discovery error code",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "capture_data_fields": [
+      {
+        "name": "capture_id",
+        "type": "u64",
+        "description": "Capture identifier generated from the ESP32 timer",
+        "attributes": {
+          "required": 1,
+          "unit": "us"
+        }
+      },
+      {
+        "name": "seq",
+        "type": "u32",
+        "description": "Block index starting at zero",
+        "attributes": {
+          "required": 1,
+          "min": 0
+        }
+      },
+      {
+        "name": "chunks",
+        "type": "u32",
+        "description": "Total capture blocks",
+        "attributes": {
+          "required": 1,
+          "min": 1
+        }
+      },
+      {
+        "name": "count",
+        "type": "u32",
+        "description": "Pulse durations in this block",
+        "attributes": {
+          "required": 1,
+          "min": 1,
+          "max": 32
+        }
+      },
+      {
+        "name": "timings",
+        "type": "list_i32",
+        "description": "Positive is HIGH and negative is LOW",
+        "attributes": {
+          "required": 1,
+          "unit": "us",
+          "separator": "comma",
+          "length_field": "count"
+        }
+      }
+    ],
+    "capture_done_fields": [
+      {
+        "name": "capture_id",
+        "type": "u64",
+        "description": "Capture identifier shared by DATA blocks",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "freq_hz",
+        "type": "u32",
+        "description": "Capture frequency",
+        "attributes": {
+          "required": 1,
+          "unit": "Hz"
+        }
+      },
+      {
+        "name": "count",
+        "type": "u32",
+        "description": "Total pulse durations",
+        "attributes": {
+          "required": 1,
+          "max": 256
+        }
+      },
+      {
+        "name": "chunks",
+        "type": "u32",
+        "description": "Total blocks",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "buffer_full",
+        "type": "bool",
+        "description": "One if the capture buffer filled; the signal may be truncated",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "capture_fail_fields": [
+      {
+        "name": "reason",
+        "type": "string",
+        "description": "busy or timeout or serialization or an ESP-IDF error name",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "capture_error_fields": [
+      {
+        "name": "reason",
+        "type": "string",
+        "description": "no_memory or task_creation or not supported frequency; absent for missing arguments",
+        "attributes": {
+          "required": 0
+        }
+      }
+    ],
+    "id_fields": [
+      {
+        "name": "id",
+        "type": "u32",
+        "description": "Client transfer identifier",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "ack_fields": [
+      {
+        "name": "id",
+        "type": "u32",
+        "description": "Client transfer identifier",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "seq",
+        "type": "u32",
+        "description": "Accepted block index",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "send_fail_fields": [
+      {
+        "name": "id",
+        "type": "u32",
+        "description": "Transfer identifier; may be zero when the request ID is invalid",
+        "attributes": {
+          "required": 1
+        }
+      },
+      {
+        "name": "reason",
+        "type": "string",
+        "description": "invalid_metadata or invalid_chunk or invalid conversion or invalid_timings or incomplete transmission or upload_timeout or an ESP-IDF error name",
+        "attributes": {
+          "required": 1
+        }
+      }
+    ],
+    "catalog_error_fields": [
+      {
+        "name": "reason",
+        "type": "string",
+        "attributes": {
+          "required": 1
+        },
+        "description": "catalog_unavailable for parse or allocation failure; catalog_invalid for invalid structure"
+      }
+    ]
+  },
+  "commands": {
+    "PING": {
+      "syntax": "PING",
+      "description": "Check UART communication",
+      "responses": [
+        {
+          "name": "PONG",
+          "ends_operation": true
+        }
+      ]
+    },
+    "INFO": {
+      "syntax": "INFO",
+      "description": "Get the firmware version",
+      "responses": [
+        {
+          "name": "INFO:OK",
+          "ends_operation": true
+        },
+        {
+          "name": "INFO:ERROR",
+          "ends_operation": true
+        }
+      ]
+    },
+    "CAPS": {
+      "syntax": "CAPS",
+      "description": "List all commands registered in this firmware build",
+      "responses": [
+        {
+          "name": "CAPS:COMMAND",
+          "ends_operation": false
+        },
+        {
+          "name": "CAPS:DONE",
+          "ends_operation": true
+        }
+      ],
+      "notes": "Lists registered handlers without filtering hardware availability"
+    },
+    "HELP": {
+      "syntax": "HELP[|command=<command> OR |message=<message>]",
+      "description": "List commands or describe one command or response",
+      "params": "help_params",
+      "responses": [
+        {
+          "name": "HELP:COMMAND",
+          "ends_operation": false
+        },
+        {
+          "name": "HELP:PARAM",
+          "ends_operation": false
+        },
+        {
+          "name": "HELP:RESPONSE",
+          "ends_operation": false
+        },
+        {
+          "name": "HELP:MESSAGE",
+          "ends_operation": false
+        },
+        {
+          "name": "HELP:FIELD",
+          "ends_operation": false
+        },
+        {
+          "name": "HELP:NOTE",
+          "ends_operation": false
+        },
+        {
+          "name": "HELP:DONE",
+          "ends_operation": true
+        },
+        {
+          "name": "HELP:ERROR",
+          "ends_operation": true
+        }
+      ],
+      "notes": "Use no selectors or exactly one nonempty command or message selector; never both; wait for DONE or ERROR before another help query"
+    },
+    "BLE_SCAN": {
+      "syntax": "BLE_SCAN",
+      "description": "Start a 15-second BLE scan",
+      "responses": [
+        {
+          "name": "BLE_SCAN:START",
+          "ends_operation": false
+        },
+        {
+          "name": "BLE_SCAN:DEVICE",
+          "ends_operation": false
+        },
+        {
+          "name": "BLE_SCAN:DONE",
+          "ends_operation": true
+        }
+      ],
+      "notes": "Wait for BLE_SCAN:DONE; scan startup failures may currently produce no terminal response"
+    },
+    "BLE_CONNECT": {
+      "syntax": "BLE_CONNECT|<mac>|<addr_type>",
+      "description": "Connect to a BLE device and discover its services and characteristics",
+      "params": "connect_params",
+      "responses": [
+        {
+          "name": "BLE_CONNECT:START",
+          "ends_operation": false
+        },
+        {
+          "name": "BLE_CONNECT:OK",
+          "ends_operation": false
+        },
+        {
+          "name": "BLE_CONNECT:FAIL",
+          "ends_operation": true
+        },
+        {
+          "name": "BLE_CONNECT:ERROR",
+          "ends_operation": true
+        },
+        {
+          "name": "BLE_CONNECT:LOST",
+          "ends_operation": true
+        },
+        {
+          "name": "BLE_DISCOVER:START",
+          "ends_operation": false
+        },
+        {
+          "name": "BLE_DISCOVER:SERVICE",
+          "ends_operation": false
+        },
+        {
+          "name": "BLE_DISCOVER:CHAR",
+          "ends_operation": false
+        },
+        {
+          "name": "BLE_DISCOVER:DONE",
+          "ends_operation": true
+        },
+        {
+          "name": "BLE_DISCOVER:FAIL",
+          "ends_operation": true
+        }
+      ],
+      "notes": "Use scan MAC and address type; discovery starts automatically after OK; LOST may arrive later asynchronously"
+    },
+    "BLE_DISCONNECT": {
+      "syntax": "BLE_DISCONNECT",
+      "description": "Close the active BLE connection",
+      "responses": [
+        {
+          "name": "BLE_DISCONNECT:OK",
+          "ends_operation": true
+        }
+      ],
+      "notes": "Requires an active connection; some stack errors currently produce no UART response"
+    },
+    "SUBGHZ_CAPTURE": {
+      "syntax": "SUBGHZ_CAPTURE|freq_hz=<freq_hz>|timeout_ms=<timeout_ms>",
+      "description": "Capture Sub-GHz pulses at the requested frequency within the timeout",
+      "params": "capture_params",
+      "responses": [
+        {
+          "name": "SUBGHZ_CAPTURE:START",
+          "ends_operation": false
+        },
+        {
+          "name": "SUBGHZ_CAPTURE:DATA",
+          "ends_operation": false
+        },
+        {
+          "name": "SUBGHZ_CAPTURE:DONE",
+          "ends_operation": true
+        },
+        {
+          "name": "SUBGHZ_CAPTURE:FAIL",
+          "ends_operation": true
+        },
+        {
+          "name": "SUBGHZ_CAPTURE:ERROR",
+          "ends_operation": true
+        }
+      ],
+      "notes": "Send freq_hz first and timeout_ms second; missing fields may produce no response; current numeric conversion is unchecked; require valid positive values; wait for DONE or FAIL or ERROR"
+    },
+    "SUBGHZ_SEND:BEGIN": {
+      "syntax": "SUBGHZ_SEND:BEGIN|id=<id>|freq_hz=<freq_hz>|repeats=<repeats>|count=<count>|chunks=<chunks>",
+      "description": "Begin uploading Sub-GHz pulses for transmission",
+      "params": "begin_params",
+      "responses": [
+        {
+          "name": "SUBGHZ_SEND:BEGIN_OK",
+          "ends_operation": true
+        },
+        {
+          "name": "SUBGHZ_SEND:FAIL",
+          "ends_operation": true
+        }
+      ],
+      "notes": "chunks must equal ceil(count / 16); a valid BEGIN replaces an incomplete upload; wait for BEGIN_OK before DATA; an upload inactive for 5000 ms fails with upload_timeout"
+    },
+    "SUBGHZ_SEND:DATA": {
+      "syntax": "SUBGHZ_SEND:DATA|id=<id>|seq=<seq>|count=<count>|timings=<timings>",
+      "description": "Upload one block of Sub-GHz pulse durations",
+      "params": "data_params",
+      "responses": [
+        {
+          "name": "SUBGHZ_SEND:ACK",
+          "ends_operation": true
+        },
+        {
+          "name": "SUBGHZ_SEND:FAIL",
+          "ends_operation": true
+        }
+      ],
+      "notes": "Requires BEGIN_OK; id must match active upload; seq starts at zero; count is min(16, remaining durations); timings length equals count; wait for matching ACK before next DATA or END; ACK does not transmit pulses"
+    },
+    "SUBGHZ_SEND:END": {
+      "syntax": "SUBGHZ_SEND:END|id=<id>",
+      "description": "Finish the upload and transmit the Sub-GHz pulses",
+      "params": "end_params",
+      "responses": [
+        {
+          "name": "SUBGHZ_SEND:DONE",
+          "ends_operation": true
+        },
+        {
+          "name": "SUBGHZ_SEND:FAIL",
+          "ends_operation": true
+        }
+      ],
+      "notes": "Requires every DATA block acknowledged and counts complete; END transmits synchronously; duplicate END fails without retransmitting"
+    }
+  },
+  "messages": {
+    "READY": {
+      "description": "BLE initialization completed at boot"
+    },
+    "PONG": {
+      "description": "UART communication confirmed"
+    },
+    "INFO:OK": {
+      "description": "Firmware identification",
+      "fields": "version_fields"
+    },
+    "CAPS:COMMAND": {
+      "description": "One registered executable command",
+      "fields": "name_fields"
+    },
+    "CAPS:DONE": {
+      "description": "End of the capability listing"
+    },
+    "HELP:COMMAND": {
+      "description": "One command or the selected command description",
+      "fields": "command_fields"
+    },
+    "HELP:PARAM": {
+      "description": "One request parameter and its constraints",
+      "fields": "metadata_fields"
+    },
+    "HELP:RESPONSE": {
+      "description": "One possible response to the selected command",
+      "fields": "response_fields"
+    },
+    "HELP:MESSAGE": {
+      "description": "Selected response description",
+      "fields": "message_fields"
+    },
+    "HELP:FIELD": {
+      "description": "One response field and its constraints",
+      "fields": "metadata_fields"
+    },
+    "HELP:NOTE": {
+      "description": "Command usage and ordering requirements",
+      "fields": "note_fields"
+    },
+    "HELP:DONE": {
+      "description": "End of a successful help query"
+    },
+    "HELP:ERROR": {
+      "description": "Terminal help query error; no DONE follows",
+      "fields": "help_error_fields"
+    },
+    "ERR": {
+      "description": "Unknown or oversized request; wire token is ERR"
+    },
+    "BLE_SCAN:START": {
+      "description": "BLE scan started"
+    },
+    "BLE_SCAN:DEVICE": {
+      "description": "Discovered BLE device",
+      "fields": "scan_fields"
+    },
+    "BLE_SCAN:DONE": {
+      "description": "BLE scan finished"
+    },
+    "BLE_CONNECT:START": {
+      "description": "BLE connection attempt started"
+    },
+    "BLE_CONNECT:OK": {
+      "description": "BLE link connected; discovery follows",
+      "fields": "connected_fields"
+    },
+    "BLE_CONNECT:FAIL": {
+      "description": "BLE connection failed",
+      "fields": "connection_reason_fields"
+    },
+    "BLE_CONNECT:LOST": {
+      "description": "Unexpected BLE disconnection",
+      "fields": "connection_reason_fields"
+    },
+    "BLE_CONNECT:ERROR": {
+      "description": "BLE connection request was invalid"
+    },
+    "BLE_DISCONNECT:OK": {
+      "description": "Requested BLE disconnection completed",
+      "fields": "mac_fields"
+    },
+    "BLE_DISCOVER:START": {
+      "description": "Automatic GATT discovery started"
+    },
+    "BLE_DISCOVER:SERVICE": {
+      "description": "Discovered GATT service",
+      "fields": "service_fields"
+    },
+    "BLE_DISCOVER:CHAR": {
+      "description": "Discovered GATT characteristic",
+      "fields": "char_fields"
+    },
+    "BLE_DISCOVER:DONE": {
+      "description": "GATT discovery finished",
+      "fields": "discovery_done_fields"
+    },
+    "BLE_DISCOVER:FAIL": {
+      "description": "GATT discovery failed",
+      "fields": "ble_reason_fields"
+    },
+    "SUBGHZ_CHECK_MODULE:OK": {
+      "description": "CC1101 initialization succeeded at boot"
+    },
+    "SUBGHZ_CHECK_MODULE:FAIL": {
+      "description": "CC1101 initialization failed at boot"
+    },
+    "SUBGHZ_CAPTURE:START": {
+      "description": "Capture started"
+    },
+    "SUBGHZ_CAPTURE:DATA": {
+      "description": "One captured pulse block",
+      "fields": "capture_data_fields"
+    },
+    "SUBGHZ_CAPTURE:DONE": {
+      "description": "Capture completed after all DATA blocks",
+      "fields": "capture_done_fields"
+    },
+    "SUBGHZ_CAPTURE:FAIL": {
+      "description": "Capture failed",
+      "fields": "capture_fail_fields"
+    },
+    "SUBGHZ_CAPTURE:ERROR": {
+      "description": "Capture setup or execution error",
+      "fields": "capture_error_fields"
+    },
+    "SUBGHZ_SEND:BEGIN_OK": {
+      "description": "Upload accepted; send the first DATA block",
+      "fields": "id_fields"
+    },
+    "SUBGHZ_SEND:ACK": {
+      "description": "Block accepted; send the next DATA block or END",
+      "fields": "ack_fields"
+    },
+    "SUBGHZ_SEND:DONE": {
+      "description": "Pulse transmission completed",
+      "fields": "id_fields"
+    },
+    "SUBGHZ_SEND:FAIL": {
+      "description": "Upload or transmission failed and the transfer was discarded",
+      "fields": "send_fail_fields"
+    },
+    "INFO:ERROR": {
+      "description": "Firmware identification could not read the embedded catalog",
+      "fields": "catalog_error_fields"
+    }
+  }
+}

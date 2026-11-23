@@ -15,26 +15,28 @@
 #include "zv_bt_gap.h"
 #include "zv_subghz.h"
 #include "zv_bt_gattc.h"
-#include "zv_uart_commands.h"
+#include "zv_com_protocol.h"
+#include "zv_protocol_catalog.h"
 #include "zv_bluetooth_device.h"
 
-#define SUBGHZ_SEND_CHUNK_VALUES            16
-#define SUBGHZ_SEND_MAX_TIMINGS             256
-#define SUBGHZ_SEND_MAX_PULSE_US            32767
-#define SUBGHZ_MAX_REPETITIONS              50
-
 #define CAPTURE_FIELD_BUFFER_SIZE 20
-#define DATA_CHUNK_MAX_VALUES 32
+#define DATA_CHUNK_MAX_VALUES ZV_COM_CAPTURE_CHUNK_VALUES
 #define DATA_CHUNK_LINE_SIZE 512
+
+_Static_assert(CC1101_CAPTURE_MAX_DURATIONS == ZV_COM_SEND_MAX_TIMINGS,
+               "Protocol metadata must match the capture buffer capacity");
 
 static const char *TAG = "ZV_UART_PROTOCOL";
 
 typedef struct {
-    const char *cmd;
+    const char *name;
     command_handler_t handler;
 } command_entry_t;
 
 static void handle_test(char *options);
+static void handle_info(char *options);
+static void handle_caps(char *options);
+static void handle_help(char *options);
 static void handle_bt_scan(char *options);
 static void handle_bt_connection(char *options);
 static void handle_bt_disconnect(char *options);
@@ -44,14 +46,17 @@ static void handle_subghz_transmission_chunk(char *options);
 static void handle_send_end(char *options);
 
 static const command_entry_t commands[] = {
-    { UART_COMMAND_REQ_TEST, handle_test },
-    { BT_COMMAND_REQ_SCAN, handle_bt_scan },
-    { BT_COMMAND_REQ_CONNECT, handle_bt_connection },
-    { BT_COMMAND_REQ_DISCONNECT, handle_bt_disconnect },
-    { SUBGHZ_COMMAND_REQ_CAPTURE, handle_subghz_capture },
-    { SUBGHZ_COMMAND_REQ_SEND_BEGIN, handle_subghz_send_begin },
-    { SUBGHZ_COMMAND_REQ_SEND_DATA, handle_subghz_transmission_chunk },
-    { SUBGHZ_COMMAND_REQ_SEND_END, handle_send_end },
+    { ZV_COM_REQ_PING, handle_test },
+    { ZV_COM_REQ_INFO, handle_info },
+    { ZV_COM_REQ_CAPS, handle_caps },
+    { ZV_COM_REQ_HELP, handle_help },
+    { ZV_COM_REQ_BLE_SCAN, handle_bt_scan },
+    { ZV_COM_REQ_BLE_CONNECT, handle_bt_connection },
+    { ZV_COM_REQ_BLE_DISCONNECT, handle_bt_disconnect },
+    { ZV_COM_REQ_SUBGHZ_CAPTURE, handle_subghz_capture },
+    { ZV_COM_REQ_SUBGHZ_SEND_BEGIN, handle_subghz_send_begin },
+    { ZV_COM_REQ_SUBGHZ_SEND_DATA, handle_subghz_transmission_chunk },
+    { ZV_COM_REQ_SUBGHZ_SEND_END, handle_send_end },
 };
 
 static struct {
@@ -67,21 +72,82 @@ static struct {
 
 static void handle_test(char *options)
 {
-    zv_uart_send_line(UART_COMMAND_RES_TEST);
+    zv_uart_send_line(ZV_COM_RES_PONG);
+}
+
+static void handle_info(char *options)
+{
+    zv_protocol_catalog_info();
+}
+
+static void handle_caps(char *options)
+{
+    size_t command_len = sizeof(commands) / sizeof(commands[0]);
+    for (size_t i = 0; i < command_len; i++)
+    {
+        command_entry_t comm_entry = commands[i];
+        zv_uart_send_formatted_line("%s|name=%s", ZV_COM_RES_CAPS_COMMAND, comm_entry.name);
+    }
+
+    zv_uart_send_line(ZV_COM_RES_CAPS_DONE);
+}
+
+static void handle_help(char *options)
+{
+    const size_t command_count = sizeof(commands) / sizeof(commands[0]);
+    if (options == NULL)
+    {
+        for (size_t i = 0; i < command_count; i++)
+            zv_uart_send_formatted_line("%s|name=%s", ZV_COM_RES_HELP_COMMAND,
+                                       commands[i].name);
+        zv_uart_send_line(ZV_COM_RES_HELP_DONE);
+
+        return;
+    }
+
+    /* Accept exactly one nonempty selector. Do not silently ignore duplicate,
+     * conflicting or unknown fields, or truncate the requested token. */
+    const bool is_command = strncmp(options, "command=", 8) == 0;
+    const bool is_message = strncmp(options, "message=", 8) == 0;
+    if ((!is_command && !is_message) || options[8] == '\0' ||
+        strchr(options, '|') != NULL || strchr(options + 8, '=') != NULL)
+    {
+        zv_uart_send_line(ZV_COM_RES_HELP_ERROR "|reason=invalid_arguments");
+        return;
+    }
+
+    const char *name = options + 8;
+    if (is_command)
+    {
+        bool registered = false;
+        for (size_t i = 0; i < command_count; i++)
+        {
+            if (strcmp(name, commands[i].name) == 0)
+                registered = true;
+        }
+            
+        if (!registered)
+        {
+            zv_uart_send_line(ZV_COM_RES_HELP_ERROR "|reason=unknown_command");
+            return;
+        }
+    }
+
+    zv_protocol_catalog_help(name, is_command);
 }
 
 static void handle_bt_scan(char *options)
 {
     zv_bt_clear_devices();
     zv_bt_start_scanning(15);
-    zv_uart_send_line(BT_COMMAND_RES_SCAN_START);
+    zv_uart_send_line(ZV_COM_RES_BLE_SCAN_START);
 }
 
 static void handle_bt_connection(char *options)
 {
     if (options == NULL)
     {
-        zv_uart_send_line(BT_COMMAND_RES_CONNECT_ERROR);
+        zv_uart_send_line(ZV_COM_RES_BLE_CONNECT_ERROR);
         return;
     }
 
@@ -89,22 +155,20 @@ static void handle_bt_connection(char *options)
     char *addr_type_str = strtok(NULL, "|");
      
     if (!mac_str || !addr_type_str) {
-        zv_uart_send_line(BT_COMMAND_RES_CONNECT_ERROR);
+        zv_uart_send_line(ZV_COM_RES_BLE_CONNECT_ERROR);
         return;
     }
 
     int addr_type = atoi(addr_type_str);
 
     uint8_t mac[6];
-    if (sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-               &mac[0], &mac[1], &mac[2],
-               &mac[3], &mac[4], &mac[5]) != 6) {
-
-        zv_uart_send_line(BT_COMMAND_RES_CONNECT_ERROR);
+    if (sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) != 6) 
+    {
+        zv_uart_send_line(ZV_COM_RES_BLE_CONNECT_ERROR);
         return;
     }
 
-    zv_uart_send_line(BT_COMMAND_RES_CONNECT_START);
+    zv_uart_send_line(ZV_COM_RES_BLE_CONNECT_START);
     zv_bt_gatt_open_connection(mac, addr_type);
 }
 
@@ -118,7 +182,7 @@ static void handle_subghz_capture(char *options)
 {
     if (options == NULL)
     {
-        zv_uart_send_line(SUBGHZ_COMMAND_RES_CAPTURE_ERROR);
+        zv_uart_send_line(ZV_COM_RES_SUBGHZ_CAPTURE_ERROR);
         return;
     }
 
@@ -143,7 +207,7 @@ static void handle_subghz_capture(char *options)
     capture_task_data_t *data = pvPortMalloc(sizeof(*data));
     if (data == NULL)
     {
-        zv_uart_send_formatted_line("%s|reason=no_memory", SUBGHZ_COMMAND_RES_CAPTURE_ERROR);
+        zv_uart_send_formatted_line("%s|reason=no_memory", ZV_COM_RES_SUBGHZ_CAPTURE_ERROR);
         return;
     }
 
@@ -155,7 +219,7 @@ static void handle_subghz_capture(char *options)
     {
         vPortFree(data);
         ESP_LOGE(TAG, "CC1101 is ready, but the Sub-GHz listener task could not be created");
-        zv_uart_send_formatted_line("%s|reason=task_creation", SUBGHZ_COMMAND_RES_CAPTURE_ERROR);
+        zv_uart_send_formatted_line("%s|reason=task_creation", ZV_COM_RES_SUBGHZ_CAPTURE_ERROR);
     }
 }
 
@@ -183,7 +247,7 @@ static bool send_capture_chunks(const zv_cc1101_capture_t *cap, uint64_t capture
 
         int written = snprintf(line, sizeof(line),
                                "%s|capture_id=%" PRIu64 "|seq=%u|chunks=%u|count=%u|timings=",
-                               SUBGHZ_COMMAND_RES_CAPTURE_DATA,
+                               ZV_COM_RES_SUBGHZ_CAPTURE_DATA,
                                capture_id, seq, chunks_amount, values_in_chunk);
 
         if (written < 0 || (size_t)written >= sizeof(line))
@@ -214,18 +278,18 @@ static void send_transmit_failure(uint32_t id, const char *reason)
 {
     transmit_context.active = false;
     zv_uart_send_formatted_line("%s|id=%" PRIu32 "|reason=%s",
-                               SUBGHZ_COMMAND_RES_SEND_FAIL, id, reason);
+                               ZV_COM_RES_SUBGHZ_SEND_FAIL, id, reason);
 }
 
 static void handle_subghz_send_begin(char *options)
 {
     uint32_t id = 0, freq, repeats, count, chunks;
     bool valid = get_uint32_field_value(options, "id", &id) && id != 0;
-    valid = valid && get_uint32_field_value(options, "freq", &freq);
-    valid = valid && get_uint32_field_value(options, "repeats", &repeats) && repeats > 0 && repeats <= SUBGHZ_MAX_REPETITIONS;
+    valid = valid && get_uint32_field_value(options, "freq_hz", &freq);
+    valid = valid && get_uint32_field_value(options, "repeats", &repeats) && repeats > 0 && repeats <= ZV_COM_SEND_MAX_REPETITIONS;
     valid = valid && get_uint32_field_value(options, "count", &count) && count != 0 && count <= CC1101_CAPTURE_MAX_DURATIONS;
     valid = valid && get_uint32_field_value(options, "chunks", &chunks) &&
-            chunks == (count + SUBGHZ_SEND_CHUNK_VALUES - 1) / SUBGHZ_SEND_CHUNK_VALUES;
+            chunks == (count + ZV_COM_SEND_CHUNK_VALUES - 1) / ZV_COM_SEND_CHUNK_VALUES;
 
     if (!valid)
     {
@@ -242,19 +306,19 @@ static void handle_subghz_send_begin(char *options)
     transmit_context.chunks = chunks;
     transmit_context.capture.freq_hz = freq;
     transmit_context.updated_at = xTaskGetTickCount();
-    zv_uart_send_formatted_line("%s|id=%" PRIu32, SUBGHZ_COMMAND_RES_SEND_BEGIN_OK, id);
+    zv_uart_send_formatted_line("%s|id=%" PRIu32, ZV_COM_RES_SUBGHZ_SEND_BEGIN_OK, id);
 }
 
 static void handle_subghz_transmission_chunk(char *options)
 {
     uint32_t id = 0, seq, count;
-    char timings[SUBGHZ_SEND_CHUNK_VALUES * 12]; /* Signed int32_t values and separators. */
+    char timings[ZV_COM_SEND_CHUNK_VALUES * 12]; /* Signed int32_t values and separators. */
     bool valid = get_uint32_field_value(options, "id", &id) && transmit_context.active && id == transmit_context.id;
     valid = valid && get_uint32_field_value(options, "seq", &seq) &&
             seq == transmit_context.next_seq && seq < transmit_context.chunks;
-    valid = valid && get_uint32_field_value(options, "count", &count) && count != 0 && count <= SUBGHZ_SEND_CHUNK_VALUES &&
-            count == (transmit_context.expected_count - transmit_context.capture.count < SUBGHZ_SEND_CHUNK_VALUES ?
-                      transmit_context.expected_count - transmit_context.capture.count : SUBGHZ_SEND_CHUNK_VALUES);
+    valid = valid && get_uint32_field_value(options, "count", &count) && count != 0 && count <= ZV_COM_SEND_CHUNK_VALUES &&
+            count == (transmit_context.expected_count - transmit_context.capture.count < ZV_COM_SEND_CHUNK_VALUES ?
+                      transmit_context.expected_count - transmit_context.capture.count : ZV_COM_SEND_CHUNK_VALUES);
     valid = valid && get_string_field_value(options, "timings", timings, sizeof(timings));
 
     if (!valid)
@@ -275,7 +339,7 @@ static void handle_subghz_transmission_chunk(char *options)
             return;
         }
 
-        if (end == cursor || value == 0 || value < -SUBGHZ_SEND_MAX_PULSE_US || value > SUBGHZ_SEND_MAX_PULSE_US ||
+        if (end == cursor || value == 0 || value < -ZV_COM_SEND_MAX_PULSE_US || value > ZV_COM_SEND_MAX_PULSE_US ||
             (i + 1 < count ? *end != ',' : *end != '\0'))
         {
             send_transmit_failure(id, "invalid_timings");
@@ -289,7 +353,7 @@ static void handle_subghz_transmission_chunk(char *options)
     transmit_context.next_seq++;
     transmit_context.updated_at = xTaskGetTickCount();
     zv_uart_send_formatted_line("%s|id=%" PRIu32 "|seq=%" PRIu32,
-                               SUBGHZ_COMMAND_RES_SEND_ACK, id, seq);
+                               ZV_COM_RES_SUBGHZ_SEND_ACK, id, seq);
 }
 
 static void handle_send_end(char *options)
@@ -308,7 +372,7 @@ static void handle_send_end(char *options)
     if (result != ESP_OK)
         send_transmit_failure(id, esp_err_to_name(result));
     else
-        zv_uart_send_formatted_line("%s|id=%" PRIu32, SUBGHZ_COMMAND_RES_SEND_DONE, id);
+        zv_uart_send_formatted_line("%s|id=%" PRIu32, ZV_COM_RES_SUBGHZ_SEND_DONE, id);
 }
 
 static void event_handler(const zv_event_t *event, void *context)
@@ -317,32 +381,44 @@ static void event_handler(const zv_event_t *event, void *context)
 
     switch(event->type)
     {
+        case ZV_EVENT_BT_SCAN_DEVICE:
+        {
+            const zv_bt_device_t *device = event->data.scan.device;
+            if (device == NULL)
+                break;
+
+            zv_uart_send_formatted_line(
+                ZV_COM_RES_BLE_SCAN_DEVICE "|name=%.48s|mac=%.17s|rssi=%d|manufacturer=%.48s|service=%.32s|appearance=%.32s|connectable=%d|addr_type=%d",
+                device->name, device->mac, device->rssi, device->manufacturer,
+                device->service, device->appearance,
+                device->connectable ? 1 : 0, (int)device->addr_type);
+            break;
+        }
+        case ZV_EVENT_BT_SCAN_DONE:
+            zv_uart_send_line(ZV_COM_RES_BLE_SCAN_DONE);
+            break;
         case ZV_EVENT_BT_CONNECTED:
             zv_uart_send_formatted_line("%s|mac=%s|mtu=%d",
-                         BT_COMMAND_RES_CONNECT_OK, event->data.connection.mac, event->data.connection.mtu);
+                         ZV_COM_RES_BLE_CONNECT_OK, event->data.connection.mac, event->data.connection.mtu);
             break;
         case ZV_EVENT_BT_CONNECTION_FAILED:
-            zv_uart_send_formatted_line("%s|mac=%s|reason=%d", 
-                BT_COMMAND_RES_CONNECT_FAIL, event->data.connection.mac,
+            zv_uart_send_formatted_line("%s|mac=%s|reason=%d", ZV_COM_RES_BLE_CONNECT_FAIL, event->data.connection.mac,
                 event->data.connection.reason);
 
             break;
         case ZV_EVENT_BT_DISCOVER_STARTED:
-            zv_uart_send_line(BT_COMMAND_RES_DISCOVER_START);
+            zv_uart_send_line(ZV_COM_RES_BLE_DISCOVER_START);
             break;
         case ZV_EVENT_BT_DISCOVER_FAILED:
-            zv_uart_send_formatted_line("%s|reason=%d",
-                BT_COMMAND_RES_DISCOVER_FAIL, event->data.discovery_result.reason);
+            zv_uart_send_formatted_line("%s|reason=%d", ZV_COM_RES_BLE_DISCOVER_FAIL, event->data.discovery_result.reason);
             break;
         case ZV_EVENT_BT_DISCOVER_SERVICE:
             zv_uart_send_formatted_line("%s|svc=%d|uuid=%s",
-                BT_COMMAND_RES_DISCOVER_SERVICE,
-                event->data.discovery_item.service_index,
+                ZV_COM_RES_BLE_DISCOVER_SERVICE, event->data.discovery_item.service_index,
                 event->data.discovery_item.uuid);
             break;
         case ZV_EVENT_BT_DISCOVER_CHARACTERISTIC:
-            zv_uart_send_formatted_line("%s|svc=%d|char=%d|uuid=%s|props=0x%02x|handle=%d",
-                BT_COMMAND_RES_DISCOVER_CHAR,
+            zv_uart_send_formatted_line("%s|svc=%d|char=%d|uuid=%s|props=0x%02x|handle=%d", ZV_COM_RES_BLE_DISCOVER_CHAR,
                 event->data.discovery_item.service_index,
                 event->data.discovery_item.characteristic_index,
                 event->data.discovery_item.uuid,
@@ -350,30 +426,25 @@ static void event_handler(const zv_event_t *event, void *context)
                 event->data.discovery_item.handle);
             break;
         case ZV_EVENT_BT_DISCOVER_DONE:
-            zv_uart_send_formatted_line("%s|services=%d|chars=%d",
-                BT_COMMAND_RES_DISCOVER_DONE,
+            zv_uart_send_formatted_line("%s|services=%d|chars=%d", ZV_COM_RES_BLE_DISCOVER_DONE,
                 event->data.discovery_result.services,
                 event->data.discovery_result.characteristics);
             break;
         case ZV_EVENT_BT_DISCONNECTED:
-            zv_uart_send_formatted_line("%s|mac=%s",
-                BT_COMMAND_RES_DISCONNECT_OK, event->data.connection.mac);
+            zv_uart_send_formatted_line("%s|mac=%s", ZV_COM_RES_BLE_DISCONNECT_OK, event->data.connection.mac);
             break;
         case ZV_EVENT_BT_CONNECTION_LOST:
-            zv_uart_send_formatted_line("%s|mac=%s|reason=%d",
-                BT_COMMAND_RES_CONNECT_LOST, event->data.connection.mac,
+            zv_uart_send_formatted_line("%s|mac=%s|reason=%d", ZV_COM_RES_BLE_CONNECT_LOST, event->data.connection.mac,
                 event->data.connection.reason);
             break;
         case ZV_EVENT_SUBGHZ_CAPTURE_STARTED:
-            zv_uart_send_line(SUBGHZ_COMMAND_RES_CAPTURE_START);
+            zv_uart_send_line(ZV_COM_RES_SUBGHZ_CAPTURE_START);
             break;
         case ZV_EVENT_SUBGHZ_CAPTURE_FAILED:
-            zv_uart_send_formatted_line("%s|reason=%s",
-                SUBGHZ_COMMAND_RES_CAPTURE_FAIL, event->data.subghz_capture.reason);
+            zv_uart_send_formatted_line("%s|reason=%s", ZV_COM_RES_SUBGHZ_CAPTURE_FAIL, event->data.subghz_capture.reason);
             break;
         case ZV_EVENT_SUBGHZ_CAPTURE_ERROR:
-            zv_uart_send_formatted_line("%s|reason=%s",
-                SUBGHZ_COMMAND_RES_CAPTURE_ERROR, event->data.subghz_capture.reason);
+            zv_uart_send_formatted_line("%s|reason=%s", ZV_COM_RES_SUBGHZ_CAPTURE_ERROR, event->data.subghz_capture.reason);
             break;
         case ZV_EVENT_SUBGHZ_CAPTURE_DONE:
         {
@@ -382,13 +453,13 @@ static void event_handler(const zv_event_t *event, void *context)
             if (!send_capture_chunks(cap, capture_id))
             {
                 ESP_LOGE(TAG, "Sub-GHz capture could not be serialized into UART chunks");
-                zv_uart_send_formatted_line("%s|reason=serialization", SUBGHZ_COMMAND_RES_CAPTURE_FAIL);
+                zv_uart_send_formatted_line("%s|reason=serialization", ZV_COM_RES_SUBGHZ_CAPTURE_FAIL);
                 break;
             }
 
             const uint16_t chunks_amount = (cap->count + DATA_CHUNK_MAX_VALUES - 1) / DATA_CHUNK_MAX_VALUES;
-            zv_uart_send_formatted_line("%s|capture_id=%" PRIu64 "|freq=%lu|count=%u|chunks=%u|buffer_full=%u",
-                SUBGHZ_COMMAND_RES_CAPTURE_DONE, capture_id, (unsigned long)cap->freq_hz,
+            zv_uart_send_formatted_line("%s|capture_id=%" PRIu64 "|freq_hz=%lu|count=%u|chunks=%u|buffer_full=%u",
+                ZV_COM_RES_SUBGHZ_CAPTURE_DONE, capture_id, (unsigned long)cap->freq_hz,
                 cap->count, chunks_amount, cap->count == CC1101_CAPTURE_MAX_DURATIONS);
             break;
         }
@@ -399,6 +470,7 @@ static void event_handler(const zv_event_t *event, void *context)
 
 void zv_uart_protocol_init(void)
 {
+    zv_bt_gap_set_event_receiver(event_handler);
     zv_bt_gattc_set_event_receiver(event_handler);
     zv_subghz_set_event_receiver(event_handler);
 }
@@ -430,7 +502,7 @@ static void process_rx_byte(uint8_t rx_byte)
             line_len = 0;
             discarding = true;
             ESP_LOGW(TAG, "UART command too long, dropping line");
-            zv_uart_send_line("ERR");
+            zv_uart_send_line(ZV_COM_RES_ERROR);
         }
 
         return;
@@ -453,7 +525,7 @@ static void process_rx_byte(uint8_t rx_byte)
 
     for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
     {
-        if (strcmp(cmd, commands[i].cmd) == 0) 
+        if (strcmp(cmd, commands[i].name) == 0)
         {
             // ESP_LOGI(TAG, "%s", cmd);
             commands[i].handler(args);
@@ -462,7 +534,7 @@ static void process_rx_byte(uint8_t rx_byte)
         }
     }
 
-    zv_uart_send_line("ERR");
+    zv_uart_send_line(ZV_COM_RES_ERROR);
     line_len = 0;
 }
 

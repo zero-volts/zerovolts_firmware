@@ -2,8 +2,6 @@
 #include "zv_bt_gattc.h"
 #include "zv_bluetooth_device.h"
 #include "zv_format_utils.h"
-#include "zv_uart.h"
-#include "zv_uart_commands.h"
 
 #include "esp_log.h"
 #include "esp_gattc_api.h"
@@ -13,6 +11,7 @@
 #define SCAN_DURATION_IN_SEC    15
 
 static const char *TAG = "ZV_BT_GAP";
+static zv_event_handler_t event_receiver;
 
 const zv_bt_signature_t zv_bt_signatures[] = {
     // Smartphones
@@ -167,6 +166,17 @@ const char *zv_bt_get_device_type(esp_bt_dev_type_t device_type)
     return "Unknown";
 }
 
+void zv_bt_gap_set_event_receiver(zv_event_handler_t handler)
+{
+    event_receiver = handler;
+}
+
+static void notify_event(const zv_event_t *event)
+{
+    if (event_receiver != NULL)
+        event_receiver(event, NULL);
+}
+
 void zv_bt_get_manufacturer_name(struct ble_scan_result_evt_param scan_result, char *out_name, int out_length)
 {
     uint8_t adv_name_length = 0;
@@ -307,14 +317,24 @@ void zv_bt_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_
                     new_device.addr_type = scan_result.ble_addr_type;
                     memcpy(new_device.mac_address, scan_result.bda, sizeof(new_device.mac_address));
 
-                    zv_bt_add_device(new_device);
+                    const zv_bt_device_t *stored_device = zv_bt_add_device(new_device);
+                    if (stored_device != NULL)
+                    {
+                        const zv_event_t found = {
+                            .type = ZV_EVENT_BT_SCAN_DEVICE,
+                            .data.scan.device = stored_device,
+                        };
+
+                        notify_event(&found);
+                    }
                     
                     break;
                 }
                 case ESP_GAP_SEARCH_INQ_CMPL_EVT:
                 {
                     ESP_LOGI(TAG, "scan complete");
-                    zv_uart_send_line(BT_COMMAND_RES_SCAN_DONE);
+                    const zv_event_t done = { .type = ZV_EVENT_BT_SCAN_DONE };
+                    notify_event(&done);
                     break;
                 }
                 default:
@@ -331,20 +351,4 @@ void zv_bt_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_
 void zv_bt_start_scanning(int duration)
 {
     esp_ble_gap_start_scanning(duration > 0 ? duration : SCAN_DURATION_IN_SEC);
-}
-
-void zv_bt_send_scan_result_uart(const zv_bt_device_t *device)
-{
-    if (!device)
-        return;
-
-    zv_uart_send_formatted_line( "SCAN:DEVICE|name=%.48s|mac=%.17s|rssi=%d|manufacturer=%.48s|service=%.32s|appearance=%.32s|connectable=%d|addr_type=%d",
-        device->name,
-        device->mac,
-        device->rssi,
-        device->manufacturer,
-        device->service,
-        device->appearance,
-        device->connectable ? 1 : 0,
-        (int)device->addr_type);
 }

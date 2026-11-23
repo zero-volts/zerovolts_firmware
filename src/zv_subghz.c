@@ -16,22 +16,24 @@
 
 
 static const char *TAG = "ZV_SUBGHZ";
+static portMUX_TYPE radio_lock = portMUX_INITIALIZER_UNLOCKED;
+
 typedef struct {
     spi_device_handle_t device_handle;
-    bool is_capturing;
+    bool radio_in_use;
+    zv_event_handler_t event_receiver;
 } subghz_context;
 
 static subghz_context local_ctx;
-static zv_event_handler_t event_receiver;
 
 void zv_subghz_set_event_receiver(zv_event_handler_t handler)
 {
-    event_receiver = handler;
+    local_ctx.event_receiver = handler;
 }
 
 static void notify_capture_event(zv_event_type_t type, const char *reason, const zv_cc1101_capture_t *capture, uint64_t capture_id)
 {
-    if (event_receiver == NULL)
+    if (local_ctx.event_receiver == NULL)
         return;
     
     const zv_event_t event = {
@@ -43,7 +45,27 @@ static void notify_capture_event(zv_event_type_t type, const char *reason, const
         },
     };
 
-    event_receiver(&event, NULL);
+    local_ctx.event_receiver(&event, NULL);
+}
+
+static bool try_reserve_radio(void)
+{
+    taskENTER_CRITICAL(&radio_lock);
+
+    bool acquired = !local_ctx.radio_in_use;
+    if (acquired)
+        local_ctx.radio_in_use = true;
+
+    taskEXIT_CRITICAL(&radio_lock);
+
+    return acquired;
+}
+
+static void release_radio(void)
+{
+    taskENTER_CRITICAL(&radio_lock);
+    local_ctx.radio_in_use = false;
+    taskEXIT_CRITICAL(&radio_lock);
 }
 
 static void zv_manual_reset(void)
@@ -216,17 +238,18 @@ static bool capture_looks_like_noise(const zv_cc1101_capture_t *cap)
 
 static void relase_capture_task()
 {
-    local_ctx.is_capturing = false;
+    release_radio();
     vTaskDelete(NULL);
 }
 
 void subghz_listener_task(void *arg)
 {
-    if (local_ctx.is_capturing)
+    if (!try_reserve_radio())
     {
         vPortFree(arg);
         notify_capture_event(ZV_EVENT_SUBGHZ_CAPTURE_FAILED, "busy", NULL, 0);
         vTaskDelete(NULL);
+
         return; 
     }
 
@@ -256,7 +279,6 @@ void subghz_listener_task(void *arg)
         return; 
     }
 
-    local_ctx.is_capturing = true;
     while ((xTaskGetTickCount() - started_at) < capture_window)
     {
         TickType_t elapsed = xTaskGetTickCount() - started_at;
@@ -301,11 +323,11 @@ void subghz_listener_task(void *arg)
 
 esp_err_t zv_subghz_transmit(const zv_cc1101_capture_t *capture, uint16_t repetitions)
 {
-    if (local_ctx.is_capturing)
-        return ESP_ERR_INVALID_STATE;
-
     if (capture == NULL || repetitions == 0)
         return ESP_ERR_INVALID_ARG;
+    
+    if (!try_reserve_radio())
+        return ESP_ERR_INVALID_STATE;
 
     esp_err_t result = zv_cc1101_set_frequency(capture->freq_hz);
     if (result == ESP_OK)
@@ -314,6 +336,7 @@ esp_err_t zv_subghz_transmit(const zv_cc1101_capture_t *capture, uint16_t repeti
     if (result != ESP_OK)
         ESP_LOGE(TAG, "Sub-GHz transmission failed: %s", esp_err_to_name(result));
 
+    release_radio();
     return result;
 }
 
@@ -327,7 +350,7 @@ void zv_subghz_deinit(void)
         local_ctx.device_handle = NULL;
     }
 
-    local_ctx.is_capturing = false;
+    release_radio();
 
     zv_spi_bus_free();
 }

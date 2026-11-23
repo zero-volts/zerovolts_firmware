@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "zv_cc1101.h"
+#include "zv_bluetooth_device.h"
 
 typedef enum {
     ZV_EVENT_BT_CONNECTED,
@@ -18,12 +19,19 @@ typedef enum {
     ZV_EVENT_SUBGHZ_CAPTURE_STARTED,
     ZV_EVENT_SUBGHZ_CAPTURE_FAILED,
     ZV_EVENT_SUBGHZ_CAPTURE_ERROR,
+    ZV_EVENT_BT_SCAN_DEVICE,
+    ZV_EVENT_BT_SCAN_DONE,
 } zv_event_type_t;
 
 typedef struct {
     zv_event_type_t type;
 
     union {
+        // SCAN_DEVICE. Borrowed data: consume or copy during the callback.
+        struct {
+            const zv_bt_device_t *device;
+        } scan;
+
         struct {
             // Borrowed data: consume or copy before the callback returns.
             const zv_cc1101_capture_t *capture;

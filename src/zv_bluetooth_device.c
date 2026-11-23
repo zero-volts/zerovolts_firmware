@@ -1,10 +1,8 @@
 #include "zv_bluetooth_device.h"
-#include "zv_uart.h"
 #include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
-#include "zv_bt_gap.h"
 
 #define MAX_DEVICES 35
 #define DEFAULT_NAME "Unknown"
@@ -83,10 +81,10 @@ zv_bt_device_t *zv_bt_get_device_by_name(const char *name)
     return NULL;
 }
 
-void zv_bt_add_device(zv_bt_device_t new_device)
+const zv_bt_device_t *zv_bt_add_device(zv_bt_device_t new_device)
 {
     if (!new_device.mac[0])
-        return;
+        return NULL;
 
     zv_bt_device_t *device = find_device(new_device.mac);
     if (device)
@@ -98,13 +96,13 @@ void zv_bt_add_device(zv_bt_device_t new_device)
         if (new_device.manufacturer[0] && strcmp(device->manufacturer, DEFAULT_NAME) == 0)
             snprintf(device->manufacturer, sizeof(device->manufacturer), "%s", new_device.manufacturer);
 
-        return;
+        return NULL;
     }
 
     if (device_count >= MAX_DEVICES)
     {
         ESP_LOGI(TAG, "Can't save more devices, is in the limit of %d", MAX_DEVICES);
-        return;
+        return NULL;
     }
 
     device = &devices[device_count++];
@@ -120,7 +118,7 @@ void zv_bt_add_device(zv_bt_device_t new_device)
     snprintf(device->service, sizeof(device->service), "%s",  new_device.service[0] ? new_device.service : DEFAULT_NAME);
     snprintf(device->appearance, sizeof(device->appearance), "%s",  new_device.appearance[0] ? new_device.appearance : DEFAULT_NAME);
 
-    zv_bt_send_scan_result_uart(device);
+    return device;
 }
 
 void zv_bt_clear_devices()

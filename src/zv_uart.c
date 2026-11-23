@@ -1,9 +1,7 @@
 #include "zv_uart.h"
 
 #include <stdlib.h>
-#include <stdio.h> 
-
-#include "zv_uart_commands.h"
+#include <stdio.h>
 
 #include "esp_log.h"
 #include "driver/uart.h"

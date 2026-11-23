@@ -17,7 +17,7 @@ typedef struct {
     bool connectable;
 } zv_bt_device_t;
 
-void zv_bt_add_device(zv_bt_device_t new_device);
+const zv_bt_device_t *zv_bt_add_device(zv_bt_device_t new_device);
 zv_bt_device_t *zv_bt_get_closest_device();
 zv_bt_device_t *zv_bt_get_device_by_name(const char *name);
 void zv_bt_clear_devices();
